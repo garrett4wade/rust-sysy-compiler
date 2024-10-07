@@ -27,11 +27,11 @@ pub struct Ret {
     pub retv: i32,
 }
 
-pub trait Koopa {
+pub trait KoopaAST {
     fn to_ir(&self) -> Program;
 }
 
-impl Koopa for CompUnit {
+impl KoopaAST for CompUnit {
     fn to_ir(&self) -> Program {
         let mut program = Program::new();
         let main_fn = program.new_func(FunctionData::with_param_names(

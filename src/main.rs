@@ -1,12 +1,11 @@
-use ast::Koopa;
-use ir::DumpableKoopa;
+use ast::KoopaAST;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
 use std::io::prelude::*;
+use koopa::back::KoopaGenerator;
 
 pub mod ast;
-pub mod ir;
 lalrpop_mod!(
     #[allow(clippy::ptr_arg)]
     #[rustfmt::skip]
@@ -39,7 +38,9 @@ fn main() -> std::io::Result<()> {
     // Convert the AST data structure into Koopa IR using
     // Koopa IR Rust APIs.
     let program = ast.unwrap().to_ir();
-
-    ofile.write_all(program.to_str().as_bytes())?;
+    let mut gen = KoopaGenerator::new(vec![]);
+    gen.generate_on(&program)?;
+    let text_form_ir = std::str::from_utf8(&gen.writer()).unwrap().to_string();
+    ofile.write_all(text_form_ir.as_bytes())?;
     Ok(())
 }
