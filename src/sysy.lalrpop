@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, FuncDef, FuncType, Block, Ret};
+use crate::ast::{CompUnit, FuncDef, FuncType, Block, Ret, Expr, OpCode};
 
 grammar;
 
@@ -19,7 +19,23 @@ pub FuncType: FuncType = {
 
 pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
 
-Ret: Ret = "return" <retv:Number> ";" => Ret {<>};
+Ret: Ret = "return" <retv:Expr> ";" => Ret {<>};
+
+Expr: Box<Expr> = {
+  OpCode Expr => Box::new(Expr::Unary(<>)),
+  Term,
+}
+
+OpCode: OpCode = {
+  "+" => OpCode::Pos,
+  "-" => OpCode::Neg,
+  "!" => OpCode::Not,
+}
+
+Term: Box<Expr> = {
+  Number => Box::new(Expr::Number(<>)),
+  "(" <Expr> ")",
+}
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
 

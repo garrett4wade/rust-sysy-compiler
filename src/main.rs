@@ -1,5 +1,4 @@
 use asm::GenerateASM;
-use ast::KoopaAST;
 use koopa::back::KoopaGenerator;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
@@ -40,7 +39,7 @@ fn main() -> std::io::Result<()> {
 
     // Convert the AST data structure into Koopa IR using
     // Koopa IR Rust APIs.
-    let program = ast.unwrap().to_ir();
+    let program = ast::build_program(&ast.unwrap()).unwrap();
 
     if _mode == "-koopa" {
         let mut gen = KoopaGenerator::new(vec![]);
