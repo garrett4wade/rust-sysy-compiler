@@ -1,10 +1,12 @@
+use asm::GenerateASM;
 use ast::KoopaAST;
+use koopa::back::KoopaGenerator;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
 use std::io::prelude::*;
-use koopa::back::KoopaGenerator;
 
+pub mod asm;
 pub mod ast;
 lalrpop_mod!(
     #[allow(clippy::ptr_arg)]
@@ -17,6 +19,7 @@ fn main() -> std::io::Result<()> {
     options.next();
 
     let _mode = options.next().unwrap();
+
     // Read file content.
     let file = options.next().unwrap();
     let content = read_to_string(file)?;
@@ -33,14 +36,22 @@ fn main() -> std::io::Result<()> {
     if let Err(_) = ast {
         return Ok(());
     }
-    println!("{:?}\n", &ast);
+    // println!("{:?}\n", &ast);
 
     // Convert the AST data structure into Koopa IR using
     // Koopa IR Rust APIs.
     let program = ast.unwrap().to_ir();
-    let mut gen = KoopaGenerator::new(vec![]);
-    gen.generate_on(&program)?;
-    let text_form_ir = std::str::from_utf8(&gen.writer()).unwrap().to_string();
-    ofile.write_all(text_form_ir.as_bytes())?;
+
+    if _mode == "-koopa" {
+        let mut gen = KoopaGenerator::new(vec![]);
+        gen.generate_on(&program)?;
+        let text_form_ir = std::str::from_utf8(&gen.writer()).unwrap().to_string();
+        ofile.write_all(text_form_ir.as_bytes())?;
+    } else if _mode == "-riscv" {
+        let asm = program.to_riscv();
+        ofile.write_all(asm.as_bytes())?;
+    } else {
+        panic!("Invalid mode");
+    }
     Ok(())
 }

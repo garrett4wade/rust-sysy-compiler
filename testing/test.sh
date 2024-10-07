@@ -6,4 +6,4 @@ if [$current_dir != "rust-sysy-compiler"]; then
 fi
 
 docker run -it --rm -v $PWD:/root/compiler maxxing/compiler-dev \
-    autotest -koopa -s lv1 /root/compiler
+    autotest -riscv -s lv1 /root/compiler
