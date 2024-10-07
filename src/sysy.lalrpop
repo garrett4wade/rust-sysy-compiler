@@ -1,0 +1,30 @@
+use crate::ast::{CompUnit, FuncDef, FuncType, Block, Ret};
+
+grammar;
+
+match {
+  r"\s*" => {},
+  r"//[^\n\r]*[\n\r]*" => {},
+  r"/\*([^*]|\*+[^*/])*\*+/" => {},
+  _
+}
+
+pub CompUnit: CompUnit = <func_def:FuncDef> => CompUnit {<>};
+
+pub FuncDef: FuncDef = <type_:FuncType> <ident:Ident> "(" ")" <block:Block> => FuncDef{<>};
+
+pub FuncType: FuncType = {
+    "int" => FuncType::Int,
+}
+
+pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
+
+Ret: Ret = "return" <retv:Number> ";" => Ret {<>};
+
+Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
+
+Number: i32 = {
+  r"[1-9][0-9]*" => i32::from_str_radix(<>, 10).unwrap(),
+  r"0[0-7]*" => i32::from_str_radix(<>, 8).unwrap(),
+  r"0[xX][0-9a-fA-F]+" => i32::from_str_radix(&<>[2..], 16).unwrap(),
+}
