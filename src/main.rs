@@ -12,7 +12,7 @@ lalrpop_mod!(
     sysy
 );
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), String> {
     let mut options = args();
     options.next();
 
@@ -20,34 +20,33 @@ fn main() -> std::io::Result<()> {
 
     // Read file content.
     let file = options.next().unwrap();
-    let content = read_to_string(file)?;
+    let content = read_to_string(file).map_err(|e| e.to_string())?;
 
     options.next();
     let ofile = options.next().unwrap();
-    let mut ofile = File::create(&ofile)?;
+    let mut ofile = File::create(&ofile).map_err(|e| e.to_string())?;
 
     // Use the lexer and parser created by lalrpop to convert the
     // source code into AST, a data structure defined in src/ast.rs.
-    let ast = sysy::CompUnitParser::new().parse(&content);
-
-    // Parsing fails (due to possibly many reasons, e.g., syntax error, unexpected EOF, etc.).
-    if let Err(_) = ast {
-        return Ok(());
-    }
+    let ast = sysy::CompUnitParser::new()
+        .parse(&content)
+        .map_err(|e| e.to_string())?;
     // println!("{:?}\n", &ast);
 
     // Convert the AST data structure into Koopa IR using
     // Koopa IR Rust APIs.
-    let program = ast::build_program(&ast.unwrap()).unwrap();
+    let program = ast::build_program(&ast).unwrap();
 
     if _mode == "-koopa" {
         let mut gen = KoopaGenerator::new(vec![]);
-        gen.generate_on(&program)?;
+        gen.generate_on(&program).map_err(|e| e.to_string())?;
         let text_form_ir = std::str::from_utf8(&gen.writer()).unwrap().to_string();
-        ofile.write_all(text_form_ir.as_bytes())?;
+        ofile
+            .write_all(text_form_ir.as_bytes())
+            .map_err(|e| e.to_string())?;
     } else if _mode == "-riscv" {
         let asm = asm::build_riscv(&program);
-        ofile.write_all(asm.as_bytes())?;
+        ofile.write_all(asm.as_bytes()).map_err(|e| e.to_string())?;
     } else {
         panic!("Invalid mode");
     }
