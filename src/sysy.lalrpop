@@ -19,22 +19,43 @@ pub FuncType: FuncType = {
 
 pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
 
-Ret: Ret = "return" <retv:Expr> ";" => Ret {<>};
+Ret: Ret = "return" <retv:AddExpr> ";" => Ret {<>};
 
-Expr: Box<Expr> = {
-  OpCode Expr => Box::new(Expr::Unary(<>)),
+AddExpr: Box<Expr> = {
+  AddExpr AddSubOp MulExpr => Box::new(Expr::Binary(<>)),
+  MulExpr,
+}
+
+AddSubOp: OpCode = {
+  "+" => OpCode::Add,
+  "-" => OpCode::Sub,
+}
+
+MulExpr: Box<Expr> = {
+  MulExpr MulDivOpCode UnaryExpr => Box::new(Expr::Binary(<>)),
+  UnaryExpr,
+}
+
+MulDivOpCode: OpCode = {
+  "*" => OpCode::Mul,
+  "/" => OpCode::Div,
+  "%" => OpCode::Mod,
+}
+
+UnaryExpr: Box<Expr> = {
+  UnaryOpCode UnaryExpr => Box::new(Expr::Unary(<>)),
   Term,
 }
 
-OpCode: OpCode = {
-  "+" => OpCode::Pos,
-  "-" => OpCode::Neg,
+UnaryOpCode: OpCode = {
+  "+" => OpCode::Add,
+  "-" => OpCode::Sub,
   "!" => OpCode::Not,
 }
 
 Term: Box<Expr> = {
   Number => Box::new(Expr::Number(<>)),
-  "(" <Expr> ")",
+  "(" <AddExpr> ")",
 }
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();

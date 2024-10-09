@@ -1,4 +1,5 @@
 use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
+use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value};
 
 // AST definition
@@ -30,21 +31,33 @@ pub struct Ret {
 
 #[derive(Debug)]
 pub enum OpCode {
-    Neg,
-    Pos,
     Not,
-}
-#[derive(Debug)]
-pub enum Expr {
-    Unary(OpCode, Box<Expr>),
-    Number(i32),
+    Sub,
+    Add,
+    Mul,
+    Div,
+    Mod,
 }
 
-// A helper struct to unroll SysY expressions.
-struct _KoopaBinaryInst {
-    op: Option<BinaryOp>,
-    lhs: Option<Value>,
-    rhs: Option<Value>,
+impl OpCode {
+    fn to_koopa_op(&self) -> BinaryOp {
+        match self {
+            OpCode::Add => BinaryOp::Add,
+            OpCode::Sub => BinaryOp::Sub,
+            OpCode::Mul => BinaryOp::Mul,
+            OpCode::Div => BinaryOp::Div,
+            OpCode::Mod => BinaryOp::Mod,
+            // special case
+            OpCode::Not => BinaryOp::Eq,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Expr {
+    Binary(Box<Expr>, OpCode, Box<Expr>),
+    Unary(OpCode, Box<Expr>),
+    Number(i32),
 }
 
 impl Expr {
@@ -57,37 +70,26 @@ impl Expr {
         %1 = sub 0, %0
         ret %1
     */
-    fn unroll(&self, stack: &mut Vec<_KoopaBinaryInst>, func_data: &mut FunctionData) {
+    fn unroll(&self, dfg: &mut DataFlowGraph, stack: &mut Vec<Value>) -> Value {
         match self {
-            Expr::Number(n) => {
-                let num = func_data.dfg_mut().new_value().integer(n.clone());
-                stack.push(_KoopaBinaryInst {
-                    op: None,
-                    lhs: Some(num),
-                    rhs: None,
-                })
-            }
-            Expr::Unary(op, sub_expr) => {
-                match op {
-                    OpCode::Neg => {
-                        let lhs = func_data.dfg_mut().new_value().integer(0);
-                        stack.push(_KoopaBinaryInst {
-                            op: Some(BinaryOp::Sub),
-                            lhs: Some(lhs),
-                            rhs: None,
-                        });
-                    }
-                    OpCode::Pos => {}
-                    OpCode::Not => {
-                        let lhs = func_data.dfg_mut().new_value().integer(0);
-                        stack.push(_KoopaBinaryInst {
-                            op: Some(BinaryOp::Eq),
-                            lhs: Some(lhs),
-                            rhs: None,
-                        });
-                    }
-                };
-                sub_expr.unroll(stack, func_data);
+            Expr::Number(n) => dfg.new_value().integer(n.clone()),
+            Expr::Unary(op, sub_expr) => match op {
+                OpCode::Sub | OpCode::Not => {
+                    let l = dfg.new_value().integer(0);
+                    let r = sub_expr.unroll(dfg, stack);
+                    let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
+                    stack.push(v);
+                    v
+                }
+                OpCode::Add => sub_expr.unroll(dfg, stack),
+                _ => panic!("Unsupported unary operator: {:?}", op),
+            },
+            Expr::Binary(lhs, op, rhs) => {
+                let l = lhs.unroll(dfg, stack);
+                let r = rhs.unroll(dfg, stack);
+                let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
+                stack.push(v);
+                v
             }
         }
     }
@@ -111,30 +113,19 @@ impl KoopaAST for Ret {
         bb: Option<&BasicBlock>,
     ) -> Result<(), String> {
         let func_data = program.func_mut(*func.unwrap());
-        let mut instr_stack: Vec<_KoopaBinaryInst> = vec![];
-        self.retv.unroll(&mut instr_stack, func_data);
-        let mut var: Option<Value> = None;
-        let mut instructions: Vec<Value> = vec![];
-        for inst in instr_stack.iter().rev() {
-            if let Some(op) = inst.op {
-                let lhs = inst.lhs.unwrap();
-                let new_var = func_data
-                    .dfg_mut()
-                    .new_value()
-                    .binary(op, lhs, var.unwrap());
-                var = Some(new_var);
-                instructions.push(new_var);
-            } else {
-                // The first number before any operation.
-                var = inst.lhs;
-            }
-        }
-        instructions.push(func_data.dfg_mut().new_value().ret(var));
+        let mut instr_stack: Vec<Value> = vec![];
+
+        // Create instructions with recursion.
+        let retv = self.retv.unroll(func_data.dfg_mut(), &mut instr_stack);
+        // Return the final value.
+        instr_stack.push(func_data.dfg_mut().new_value().ret(Some(retv)));
+
+        // Record all instructions.
         func_data
             .layout_mut()
             .bb_mut(*bb.unwrap())
             .insts_mut()
-            .extend(instructions);
+            .extend(instr_stack);
         Ok(())
     }
 }
@@ -146,7 +137,7 @@ impl KoopaAST for FuncDef {
         _: Option<&Function>,
         _: Option<&BasicBlock>,
     ) -> Result<(), String> {
-        // Only the main function is supported.
+        // TODO: Only the main function is supported.
         let function = program.new_func(FunctionData::with_param_names(
             format!("@{}", self.ident),
             vec![],
