@@ -75,33 +75,14 @@ impl RegAllocator {
     }
 }
 
-fn resolve_binary_op_inst(
-    value: &Value,
-    op: &BinaryOp,
-    lhs: &String,
-    rhs: &String,
-    regalloc: &mut RegAllocator,
-    instrs: &mut Vec<String>,
-) {
+fn binary_op_to_riscv_instr(op: &BinaryOp) -> &str {
     match op {
-        BinaryOp::Sub => {
-            instrs.push(format!(
-                "sub {}, {}, {}",
-                regalloc.allocate(value.clone()),
-                lhs,
-                rhs
-            ));
-        }
-        BinaryOp::Eq => {
-            let mut out: &String = lhs;
-            if out == "x0" {
-                out = rhs;
-            }
-            instrs.push(format!("xor {}, {}, {}", out, lhs, rhs));
-            instrs.push(format!("seqz {}, {}", out, out));
-            regalloc.put(value, out);
-        }
-        _ => unreachable!("Not implemented"),
+        BinaryOp::Add => "add",
+        BinaryOp::Sub => "sub",
+        BinaryOp::Mul => "mul",
+        BinaryOp::Div => "div",
+        BinaryOp::Mod => "rem",
+        _ => panic!("Not implemented"),
     }
 }
 
@@ -130,6 +111,10 @@ fn generate_one_inst(
             instrs.push("ret".to_string());
         }
         ValueKind::Binary(b) => {
+            let lhs_kd = dfg.value(b.lhs()).kind();
+            let rhs_kd = dfg.value(b.rhs()).kind();
+
+            // load integers and create registers
             let lhs_v: String;
             if let ValueKind::Integer(i) = dfg.value(b.lhs()).kind() {
                 if i.value() == 0 {
@@ -146,13 +131,42 @@ fn generate_one_inst(
                 if i.value() == 0 {
                     rhs_v = "x0".to_string();
                 } else {
-                    rhs_v = regalloc.allocate(b.lhs());
+                    rhs_v = regalloc.allocate(b.rhs());
                     instrs.push(format!("li {}, {}", rhs_v, i.value()));
                 }
             } else {
                 rhs_v = regalloc.get(&b.rhs());
             }
-            resolve_binary_op_inst(&value, &b.op(), &lhs_v, &rhs_v, regalloc, instrs);
+
+            // decide the output register name
+            let regout: String;
+            if matches!(lhs_kd, ValueKind::Integer(_i) if _i.value() != 0) {
+                regout = regalloc.get(&b.lhs());
+                regalloc.put(value, &regout);
+            } else if matches!(rhs_kd, ValueKind::Integer(_i) if _i.value() != 0) {
+                regout = regalloc.get(&b.rhs());
+                regalloc.put(value, &regout);
+            } else {
+                // both not integer or both zero
+                regout = regalloc.allocate(value.clone());
+            }
+
+            match b.op() {
+                BinaryOp::Add | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Mul | BinaryOp::Sub => {
+                    instrs.push(format!(
+                        "{} {}, {}, {}",
+                        binary_op_to_riscv_instr(&b.op()),
+                        regout,
+                        lhs_v,
+                        rhs_v,
+                    ));
+                }
+                BinaryOp::Eq => {
+                    instrs.push(format!("xor {}, {}, {}", regout, lhs_v, rhs_v));
+                    instrs.push(format!("seqz {}, {}", regout, regout));
+                }
+                _ => unreachable!("Not implemented"),
+            }
         }
         _ => {
             panic!("Not implemented");
