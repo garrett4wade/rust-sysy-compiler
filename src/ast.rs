@@ -40,48 +40,60 @@ pub enum Expr {
     Number(i32),
 }
 
+// A helper struct to unroll SysY expressions.
 struct _KoopaBinaryInst {
     op: Option<BinaryOp>,
     lhs: Option<Value>,
     rhs: Option<Value>,
 }
 
-fn _unwrap_expr(stack: &mut Vec<_KoopaBinaryInst>, expr: &Expr, func_data: &mut FunctionData) {
-    match expr {
-        Expr::Number(n) => {
-            let num = func_data.dfg_mut().new_value().integer(n.clone());
-            stack.push(_KoopaBinaryInst {
-                op: None,
-                lhs: Some(num),
-                rhs: None,
-            })
-        }
-        Expr::Unary(op, sub_expr) => {
-            match op {
-                OpCode::Neg => {
-                    let lhs = func_data.dfg_mut().new_value().integer(0);
-                    stack.push(_KoopaBinaryInst {
-                        op: Some(BinaryOp::Sub),
-                        lhs: Some(lhs),
-                        rhs: None,
-                    });
-                }
-                OpCode::Pos => {}
-                OpCode::Not => {
-                    let lhs = func_data.dfg_mut().new_value().integer(0);
-                    stack.push(_KoopaBinaryInst {
-                        op: Some(BinaryOp::Eq),
-                        lhs: Some(lhs),
-                        rhs: None,
-                    });
-                }
-            };
-            _unwrap_expr(stack, sub_expr.as_ref(), func_data);
+impl Expr {
+    /*
+    Unwrap a single-line command into a series of IR instructions.
+    A single-line command may contain many operations, e.g., `return -(!2)`.
+    We should decompose it into a series of binary instructions, e.g.,
+    %entry:
+        %0 = eq 0, 2
+        %1 = sub 0, %0
+        ret %1
+    */
+    fn unroll(&self, stack: &mut Vec<_KoopaBinaryInst>, func_data: &mut FunctionData) {
+        match self {
+            Expr::Number(n) => {
+                let num = func_data.dfg_mut().new_value().integer(n.clone());
+                stack.push(_KoopaBinaryInst {
+                    op: None,
+                    lhs: Some(num),
+                    rhs: None,
+                })
+            }
+            Expr::Unary(op, sub_expr) => {
+                match op {
+                    OpCode::Neg => {
+                        let lhs = func_data.dfg_mut().new_value().integer(0);
+                        stack.push(_KoopaBinaryInst {
+                            op: Some(BinaryOp::Sub),
+                            lhs: Some(lhs),
+                            rhs: None,
+                        });
+                    }
+                    OpCode::Pos => {}
+                    OpCode::Not => {
+                        let lhs = func_data.dfg_mut().new_value().integer(0);
+                        stack.push(_KoopaBinaryInst {
+                            op: Some(BinaryOp::Eq),
+                            lhs: Some(lhs),
+                            rhs: None,
+                        });
+                    }
+                };
+                sub_expr.unroll(stack, func_data);
+            }
         }
     }
 }
 
-// AST conversion
+// Converting an AST to Koopa IR using koopa::ir API.
 pub trait KoopaAST {
     fn add_to_program(
         &self,
@@ -100,7 +112,7 @@ impl KoopaAST for Ret {
     ) -> Result<(), String> {
         let func_data = program.func_mut(*func.unwrap());
         let mut instr_stack: Vec<_KoopaBinaryInst> = vec![];
-        _unwrap_expr(&mut instr_stack, &self.retv, func_data);
+        self.retv.unroll(&mut instr_stack, func_data);
         let mut var: Option<Value> = None;
         let mut instructions: Vec<Value> = vec![];
         for inst in instr_stack.iter().rev() {
@@ -157,6 +169,8 @@ impl KoopaAST for FuncDef {
 
 pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
     let mut program: Program = Program::new();
-    comp_unit.func_def.add_to_program(&mut program, None, None)?;
+    comp_unit
+        .func_def
+        .add_to_program(&mut program, None, None)?;
     Ok(program)
 }

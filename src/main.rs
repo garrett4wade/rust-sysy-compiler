@@ -1,4 +1,3 @@
-use asm::GenerateASM;
 use koopa::back::KoopaGenerator;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
@@ -47,7 +46,7 @@ fn main() -> std::io::Result<()> {
         let text_form_ir = std::str::from_utf8(&gen.writer()).unwrap().to_string();
         ofile.write_all(text_form_ir.as_bytes())?;
     } else if _mode == "-riscv" {
-        let asm = program.to_riscv();
+        let asm = asm::build_riscv(&program);
         ofile.write_all(asm.as_bytes())?;
     } else {
         panic!("Invalid mode");
