@@ -19,7 +19,47 @@ pub FuncType: FuncType = {
 
 pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
 
-Ret: Ret = "return" <retv:AddExpr> ";" => Ret {<>};
+Ret: Ret = "return" <retv:OrExpr> ";" => Ret {<>};
+
+OrExpr: Box<Expr> = {
+  OrExpr LogicOr AndExpr => Box::new(Expr::Binary(<>)),
+  AndExpr,
+}
+
+LogicOr: OpCode = {
+  "||" => OpCode::LogicOr,
+}
+
+AndExpr: Box<Expr> = {
+  AndExpr LogicAnd EqExpr => Box::new(Expr::Binary(<>)),
+  EqExpr,
+}
+
+LogicAnd: OpCode = {
+  "&&" => OpCode::LogicAnd,
+}
+
+EqExpr: Box<Expr> = {
+  EqExpr EqNeOp RelExpr => Box::new(Expr::Binary(<>)),
+  RelExpr,
+}
+
+EqNeOp: OpCode = {
+  "==" => OpCode::Eq,
+  "!=" => OpCode::Ne,
+}
+
+RelExpr: Box<Expr> = {
+  RelExpr RelOp AddExpr => Box::new(Expr::Binary(<>)),
+  AddExpr,
+}
+
+RelOp: OpCode = {
+  "<=" => OpCode::Le,
+  ">=" => OpCode::Ge,
+  "<" => OpCode::Lt,
+  ">" => OpCode::Gt,
+}
 
 AddExpr: Box<Expr> = {
   AddExpr AddSubOp MulExpr => Box::new(Expr::Binary(<>)),
@@ -55,7 +95,7 @@ UnaryOpCode: OpCode = {
 
 Term: Box<Expr> = {
   Number => Box::new(Expr::Number(<>)),
-  "(" <AddExpr> ")",
+  "(" <OrExpr> ")",
 }
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();

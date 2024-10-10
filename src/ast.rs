@@ -31,17 +31,38 @@ pub struct Ret {
 
 #[derive(Debug)]
 pub enum OpCode {
-    Not,
-    Sub,
-    Add,
+    // lv 1
+    LogicOr,
+    // lv 2
+    LogicAnd,
+    // lv 3
+    Eq,
+    Ne,
+    // lv 4
+    Le,
+    Ge,
+    Lt,
+    Gt,
+    // lv 5
     Mul,
     Div,
     Mod,
+    // lv 6
+    Sub,
+    Add,
+    // lv 7, unary, including Sub and Add
+    Not,
 }
 
 impl OpCode {
     fn to_koopa_op(&self) -> BinaryOp {
         match self {
+            OpCode::Eq => BinaryOp::Eq,
+            OpCode::Ne => BinaryOp::NotEq,
+            OpCode::Le => BinaryOp::Le,
+            OpCode::Ge => BinaryOp::Ge,
+            OpCode::Lt => BinaryOp::Lt,
+            OpCode::Gt => BinaryOp::Gt,
             OpCode::Add => BinaryOp::Add,
             OpCode::Sub => BinaryOp::Sub,
             OpCode::Mul => BinaryOp::Mul,
@@ -49,6 +70,7 @@ impl OpCode {
             OpCode::Mod => BinaryOp::Mod,
             // special case
             OpCode::Not => BinaryOp::Eq,
+            _ => panic!("Invalid operator: {:?}", self),
         }
     }
 }
@@ -87,9 +109,29 @@ impl Expr {
             Expr::Binary(lhs, op, rhs) => {
                 let l = lhs.unroll(dfg, stack);
                 let r = rhs.unroll(dfg, stack);
-                let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
-                stack.push(v);
-                v
+                match op {
+                    OpCode::LogicOr => {
+                        let z = dfg.new_value().integer(0);
+                        let lneq0 = dfg.new_value().binary(BinaryOp::NotEq, l, z);
+                        let rneq0 = dfg.new_value().binary(BinaryOp::NotEq, r, z);
+                        let v = dfg.new_value().binary(BinaryOp::Or, lneq0, rneq0);
+                        stack.extend([lneq0, rneq0, v]);
+                        v
+                    }
+                    OpCode::LogicAnd => {
+                        let z = dfg.new_value().integer(0);
+                        let lneq0 = dfg.new_value().binary(BinaryOp::NotEq, l, z);
+                        let rneq0 = dfg.new_value().binary(BinaryOp::NotEq, r, z);
+                        let v = dfg.new_value().binary(BinaryOp::And, lneq0, rneq0);
+                        stack.extend([lneq0, rneq0, v]);
+                        v
+                    }
+                    _ => {
+                        let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
+                        stack.push(v);
+                        v
+                    }
+                }
             }
         }
     }
