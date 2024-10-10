@@ -1,7 +1,0 @@
-fun @main(): i32 {
-%entry:
-  %0 = add 1, 2
-  %1 = mul 3, %0
-  %2 = mod %1, 23
-  ret %2
-}

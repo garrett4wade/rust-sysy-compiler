@@ -12,7 +12,9 @@ pub trait DebugASM {
 }
 
 static INDENT: &'static str = "  ";
-static TMP_REGS: [&'static str; 7] = ["t0", "t1", "t2", "t3", "t4", "t5", "t6"];
+static TMP_REGS: [&'static str; 14] = [
+    "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6",
+];
 
 impl DebugASM for Value {
     fn print_debug_inst(&self, dfg: &DataFlowGraph) {
@@ -82,6 +84,10 @@ fn binary_op_to_riscv_instr(op: &BinaryOp) -> &str {
         BinaryOp::Mul => "mul",
         BinaryOp::Div => "div",
         BinaryOp::Mod => "rem",
+        BinaryOp::Lt => "slt",
+        BinaryOp::Gt => "sgt",
+        BinaryOp::And => "and",
+        BinaryOp::Or => "or",
         _ => panic!("Not implemented"),
     }
 }
@@ -152,7 +158,15 @@ fn generate_one_inst(
             }
 
             match b.op() {
-                BinaryOp::Add | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Mul | BinaryOp::Sub => {
+                BinaryOp::Add
+                | BinaryOp::Div
+                | BinaryOp::Mod
+                | BinaryOp::Mul
+                | BinaryOp::Sub
+                | BinaryOp::Gt
+                | BinaryOp::Lt
+                | BinaryOp::And
+                | BinaryOp::Or => {
                     instrs.push(format!(
                         "{} {}, {}, {}",
                         binary_op_to_riscv_instr(&b.op()),
@@ -161,9 +175,33 @@ fn generate_one_inst(
                         rhs_v,
                     ));
                 }
-                BinaryOp::Eq => {
-                    instrs.push(format!("xor {}, {}, {}", regout, lhs_v, rhs_v));
+                BinaryOp::Ge | BinaryOp::Le => {
+                    let ins: &str;
+                    if matches!(b.op(), BinaryOp::Ge) {
+                        ins = "slt";
+                    } else {
+                        ins = "sgt";
+                    }
+                    instrs.push(format!("{} {}, {}, {}", ins, regout, lhs_v, rhs_v,));
                     instrs.push(format!("seqz {}, {}", regout, regout));
+                }
+                BinaryOp::Eq | BinaryOp::NotEq => {
+                    let ins: &str;
+                    if matches!(b.op(), BinaryOp::Eq) {
+                        ins = "seqz";
+                    } else {
+                        ins = "snez";
+                    }
+                    if lhs_v == "x0" && rhs_v == "x0" {
+                        instrs.push(format!("li {}, 1", regout));
+                    } else if lhs_v != "x0" && rhs_v != "x0" {
+                        instrs.push(format!("xor {}, {}, {}", regout, lhs_v, rhs_v));
+                        instrs.push(format!("{} {}, {}", ins, regout, regout));
+                    } else if lhs_v == "x0" {
+                        instrs.push(format!("{} {}, {}", ins, regout, rhs_v));
+                    } else {
+                        instrs.push(format!("{} {}, {}", ins, regout, lhs_v));
+                    }
                 }
                 _ => unreachable!("Not implemented"),
             }
