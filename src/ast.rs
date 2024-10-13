@@ -20,6 +20,11 @@ pub enum FuncType {
 }
 
 #[derive(Debug)]
+pub enum BType {
+    Int,
+}
+
+#[derive(Debug)]
 pub struct Block {
     pub ret: Ret,
 }
@@ -130,6 +135,44 @@ impl Expr {
                         stack.push(v);
                         v
                     }
+                }
+            }
+        }
+    }
+
+    fn reduce(&self, dfg: &DataFlowGraph) -> i32 {
+        match self {
+            Expr::Number(n) => *n,
+            Expr::Unary(op, sub_expr) => match op {
+                OpCode::Sub => -sub_expr.reduce(dfg),
+                OpCode::Not => {
+                    let v = sub_expr.reduce(dfg);
+                    if v == 0 {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                _ => panic!("Unsupported unary operator: {:?}", op),
+            },
+            Expr::Binary(lhs, op, rhs) => {
+                let l = lhs.reduce(dfg);
+                let r = rhs.reduce(dfg);
+                match op {
+                    OpCode::Add => l + r,
+                    OpCode::Sub => l - r,
+                    OpCode::Mul => l * r,
+                    OpCode::Div => l / r,
+                    OpCode::Mod => l % r,
+                    OpCode::Eq => (l == r).into(),
+                    OpCode::Ne => (l != r).into(),
+                    OpCode::Lt => (l < r).into(),
+                    OpCode::Gt => (l > r).into(),
+                    OpCode::Le => (l <= r).into(),
+                    OpCode::Ge => (l >= r).into(),
+                    OpCode::LogicAnd => ((l != 0) && (l != 0)).into(),
+                    OpCode::LogicOr => ((l != 0) || (l != 0)).into(),
+                    OpCode::Not => panic!("Unsupported binary operator: {:?}", op),
                 }
             }
         }

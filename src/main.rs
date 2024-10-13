@@ -2,6 +2,7 @@ use koopa::back::KoopaGenerator;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
+use std::collections::HashMap;
 use std::io::prelude::*;
 
 pub mod asm;
@@ -29,8 +30,9 @@ fn main() -> Result<(), String> {
 
     // Use the lexer and parser created by lalrpop to convert the
     // source code into AST, a data structure defined in src/ast.rs.
+    let mut const_table: HashMap<String, i32> = HashMap::new();
     let ast = sysy::CompUnitParser::new()
-        .parse(&content)
+        .parse(&mut const_table, &content)
         .map_err(|e| e.to_string())?;
     // println!("{:?}\n", &ast);
 

@@ -1,6 +1,7 @@
 use crate::ast::{CompUnit, FuncDef, FuncType, Block, Ret, Expr, OpCode};
+use std::collections::HashMap;
 
-grammar;
+grammar(const_table: &mut HashMap<String, i32>);
 
 match {
   r"\s*" => {},
@@ -21,37 +22,44 @@ pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
 
 Ret: Ret = "return" <retv:Expr> ";" => Ret {<>};
 
-Expr: Box<Expr> = {
-  Expr LogicOr AndExpr => Box::new(Expr::Binary(<>)),
-  AndExpr,
+
+
+
+// Expression
+BinaryTier<Op, NextTier>: Box<Expr> = {
+    BinaryTier<Op, NextTier> Op NextTier => Box::new(Expr::Binary(<>)),
+    NextTier
+};
+
+Expr = BinaryTier<LogicOr, AndExpr>;
+AndExpr = BinaryTier<LogicAnd, EqExpr>;
+EqExpr = BinaryTier<EqNeOp, RelExpr>;
+RelExpr = BinaryTier<RelOp, AddExpr>;
+AddExpr = BinaryTier<AddSubOp, MulExpr>;
+MulExpr = BinaryTier<MulDivOpCode, UnaryExpr>;
+
+UnaryExpr: Box<Expr> = {
+  UnaryOpCode UnaryExpr => Box::new(Expr::Unary(<>)),
+  Term,
 }
 
+Term: Box<Expr> = {
+  Number => Box::new(Expr::Number(<>)),
+  "(" <Expr> ")",
+}
+
+// OPs, numbers, and symbols
 LogicOr: OpCode = {
   "||" => OpCode::LogicOr,
-}
-
-AndExpr: Box<Expr> = {
-  AndExpr LogicAnd EqExpr => Box::new(Expr::Binary(<>)),
-  EqExpr,
 }
 
 LogicAnd: OpCode = {
   "&&" => OpCode::LogicAnd,
 }
 
-EqExpr: Box<Expr> = {
-  EqExpr EqNeOp RelExpr => Box::new(Expr::Binary(<>)),
-  RelExpr,
-}
-
 EqNeOp: OpCode = {
   "==" => OpCode::Eq,
   "!=" => OpCode::Ne,
-}
-
-RelExpr: Box<Expr> = {
-  RelExpr RelOp AddExpr => Box::new(Expr::Binary(<>)),
-  AddExpr,
 }
 
 RelOp: OpCode = {
@@ -61,19 +69,9 @@ RelOp: OpCode = {
   ">" => OpCode::Gt,
 }
 
-AddExpr: Box<Expr> = {
-  AddExpr AddSubOp MulExpr => Box::new(Expr::Binary(<>)),
-  MulExpr,
-}
-
 AddSubOp: OpCode = {
   "+" => OpCode::Add,
   "-" => OpCode::Sub,
-}
-
-MulExpr: Box<Expr> = {
-  MulExpr MulDivOpCode UnaryExpr => Box::new(Expr::Binary(<>)),
-  UnaryExpr,
 }
 
 MulDivOpCode: OpCode = {
@@ -82,20 +80,10 @@ MulDivOpCode: OpCode = {
   "%" => OpCode::Mod,
 }
 
-UnaryExpr: Box<Expr> = {
-  UnaryOpCode UnaryExpr => Box::new(Expr::Unary(<>)),
-  Term,
-}
-
 UnaryOpCode: OpCode = {
   "+" => OpCode::Add,
   "-" => OpCode::Sub,
   "!" => OpCode::Not,
-}
-
-Term: Box<Expr> = {
-  Number => Box::new(Expr::Number(<>)),
-  "(" <Expr> ")",
 }
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
