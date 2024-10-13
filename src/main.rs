@@ -30,9 +30,8 @@ fn main() -> Result<(), String> {
 
     // Use the lexer and parser created by lalrpop to convert the
     // source code into AST, a data structure defined in src/ast.rs.
-    let mut const_table: HashMap<String, i32> = HashMap::new();
     let ast = sysy::CompUnitParser::new()
-        .parse(&mut const_table, &content)
+        .parse(&content)
         .map_err(|e| e.to_string())?;
     // println!("{:?}\n", &ast);
 

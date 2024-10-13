@@ -1,7 +1,7 @@
-use crate::ast::{CompUnit, FuncDef, FuncType, Block, Ret, Expr, OpCode};
+use crate::ast::{CompUnit, FuncDef, FuncType, Block, BlockItem, Expr, OpCode, BType, Symbol, SymbolValue};
 use std::collections::HashMap;
 
-grammar(const_table: &mut HashMap<String, i32>);
+grammar;
 
 match {
   r"\s*" => {},
@@ -9,6 +9,16 @@ match {
   r"/\*([^*]|\*+[^*/])*\*+/" => {},
   _
 }
+
+List<T, S>: Vec<T> = {
+    <mut v:(<T> S)*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
 
 pub CompUnit: CompUnit = <func_def:FuncDef> => CompUnit {<>};
 
@@ -18,12 +28,23 @@ pub FuncType: FuncType = {
     "int" => FuncType::Int,
 }
 
-pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
+pub Block: Block = "{" <items:(<BlockItem> ";")*> "}" => Block {<>};
 
-Ret: Ret = "return" <retv:Expr> ";" => Ret {<>};
+BlockItem: BlockItem = {
+  "return" <e:Expr> => BlockItem::Ret(e),
+  "const" <type_:BType> <v:List<ConstVarDef, ",">> => BlockItem::Decl(v),
+};
 
+ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {
+  Symbol {
+    name: k,
+    value: SymbolValue::Const(e),
+  }
+};
 
-
+BType: BType = {
+  "int" => BType::Int,
+};
 
 // Expression
 BinaryTier<Op, NextTier>: Box<Expr> = {

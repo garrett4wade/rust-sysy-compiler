@@ -20,18 +20,38 @@ pub enum FuncType {
 }
 
 #[derive(Debug)]
+pub struct Block {
+    pub items: Vec<BlockItem>,
+}
+
+#[derive(Debug)]
+pub enum BlockItem {
+    Decl(Vec<Symbol>),
+    Ret(Box<Expr>),
+}
+
+#[derive(Debug)]
+pub enum Expr {
+    Binary(Box<Expr>, OpCode, Box<Expr>),
+    Unary(OpCode, Box<Expr>),
+    Number(i32),
+}
+
+#[derive(Debug)]
+pub struct Symbol {
+    pub name: String,
+    pub value: SymbolValue,
+}
+
+#[derive(Debug)]
+pub enum SymbolValue {
+    Const(Box<Expr>),
+    Var(Option<Box<Expr>>), // init val
+}
+
+#[derive(Debug)]
 pub enum BType {
     Int,
-}
-
-#[derive(Debug)]
-pub struct Block {
-    pub ret: Ret,
-}
-
-#[derive(Debug)]
-pub struct Ret {
-    pub retv: Box<Expr>,
 }
 
 #[derive(Debug)]
@@ -77,13 +97,6 @@ impl From<&OpCode> for BinaryOp {
             _ => panic!("Invalid operator: {:?}", value),
         }
     }
-}
-
-#[derive(Debug)]
-pub enum Expr {
-    Binary(Box<Expr>, OpCode, Box<Expr>),
-    Unary(OpCode, Box<Expr>),
-    Number(i32),
 }
 
 impl Expr {
@@ -140,7 +153,7 @@ impl Expr {
         }
     }
 
-    fn reduce(&self, dfg: &DataFlowGraph) -> i32 {
+    pub fn reduce(&self, dfg: &DataFlowGraph) -> i32 {
         match self {
             Expr::Number(n) => *n,
             Expr::Unary(op, sub_expr) => match op {
@@ -189,28 +202,33 @@ pub trait KoopaAST {
     ) -> Result<(), String>;
 }
 
-impl KoopaAST for Ret {
+impl KoopaAST for BlockItem {
     fn add_to_program(
         &self,
         program: &mut Program,
         func: Option<&Function>,
         bb: Option<&BasicBlock>,
     ) -> Result<(), String> {
-        let func_data = program.func_mut(*func.unwrap());
-        let mut instr_stack: Vec<Value> = vec![];
+        match self {
+            BlockItem::Decl(_) => Ok(()), // TODO:
+            BlockItem::Ret(expr) => {
+                let func_data = program.func_mut(*func.unwrap());
+                let mut instr_stack: Vec<Value> = vec![];
 
-        // Create instructions with recursion.
-        let retv = self.retv.unroll(func_data.dfg_mut(), &mut instr_stack);
-        // Return the final value.
-        instr_stack.push(func_data.dfg_mut().new_value().ret(Some(retv)));
+                // Create instructions with recursion.
+                let retv = expr.unroll(func_data.dfg_mut(), &mut instr_stack);
+                // Return the final value.
+                instr_stack.push(func_data.dfg_mut().new_value().ret(Some(retv)));
 
-        // Record all instructions.
-        func_data
-            .layout_mut()
-            .bb_mut(*bb.unwrap())
-            .insts_mut()
-            .extend(instr_stack);
-        Ok(())
+                // Record all instructions.
+                func_data
+                    .layout_mut()
+                    .bb_mut(*bb.unwrap())
+                    .insts_mut()
+                    .extend(instr_stack);
+                Ok(())
+            }
+        }
     }
 }
 
@@ -235,9 +253,9 @@ impl KoopaAST for FuncDef {
             .new_bb()
             .basic_block(Some("%entry".into()));
         func_data.layout_mut().bbs_mut().extend([entry]);
-        self.block
-            .ret
-            .add_to_program(program, Some(&function), Some(&entry))?;
+        for item in self.block.items.iter() {
+            item.add_to_program(program, Some(&function), Some(&entry))?;
+        }
         Ok(())
     }
 }
