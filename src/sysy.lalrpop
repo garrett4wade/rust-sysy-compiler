@@ -19,10 +19,10 @@ pub FuncType: FuncType = {
 
 pub Block: Block = "{" <ret: Ret> "}" => Block {<>};
 
-Ret: Ret = "return" <retv:OrExpr> ";" => Ret {<>};
+Ret: Ret = "return" <retv:Expr> ";" => Ret {<>};
 
-OrExpr: Box<Expr> = {
-  OrExpr LogicOr AndExpr => Box::new(Expr::Binary(<>)),
+Expr: Box<Expr> = {
+  Expr LogicOr AndExpr => Box::new(Expr::Binary(<>)),
   AndExpr,
 }
 
@@ -95,7 +95,7 @@ UnaryOpCode: OpCode = {
 
 Term: Box<Expr> = {
   Number => Box::new(Expr::Number(<>)),
-  "(" <OrExpr> ")",
+  "(" <Expr> ")",
 }
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
