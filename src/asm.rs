@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use crate::reg::RegAllocator;
 use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::{BinaryOp, Program, Value, ValueKind};
 
@@ -12,9 +11,6 @@ pub trait DebugASM {
 }
 
 static INDENT: &'static str = "  ";
-static TMP_REGS: [&'static str; 14] = [
-    "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a0", "a1", "a2", "a3", "a4", "a5", "a6",
-];
 
 impl DebugASM for Value {
     fn print_debug_inst(&self, dfg: &DataFlowGraph) {
@@ -47,36 +43,6 @@ impl DebugASM for Value {
     }
 }
 
-struct RegAllocator {
-    offset: usize,
-    regidx: HashMap<Value, usize>,
-}
-
-impl RegAllocator {
-    fn new() -> Self {
-        RegAllocator {
-            offset: 0,
-            regidx: HashMap::new(),
-        }
-    }
-
-    fn allocate(&mut self, value: Value) -> String {
-        let idx = self.offset;
-        self.regidx.insert(value, idx);
-        self.offset = self.offset + 1;
-        TMP_REGS[idx].to_string()
-    }
-
-    fn get(&self, value: &Value) -> String {
-        TMP_REGS[*self.regidx.get(value).unwrap()].to_string()
-    }
-
-    fn put(&mut self, value: &Value, reg: &String) {
-        let idx = TMP_REGS.iter().position(|&x| x == reg).unwrap();
-        self.regidx.insert(value.clone(), idx);
-    }
-}
-
 fn binary_op_to_riscv_instr(op: &BinaryOp) -> &str {
     match op {
         BinaryOp::Add => "add",
@@ -104,58 +70,50 @@ fn generate_one_inst(
         ValueKind::Return(r) => {
             let ret_v = r.value();
             if let Some(v) = ret_v {
-                if let ValueKind::Integer(i) = dfg.value(v.clone()).kind() {
-                    if i.value() == 0 {
-                        instrs.push("mv a0, x0".to_string());
-                    } else {
-                        instrs.push(format!("li a0, {}", i.value()));
+                match dfg.value(v).kind() {
+                    ValueKind::Integer(i) => {
+                        if i.value() != 0 {
+                            instrs.push(format!("li a0, {}", i.value()));
+                        } else {
+                            instrs.push("mv a0, x0".to_string());
+                        }
                     }
-                } else {
-                    instrs.push(format!("mv a0, {}", regalloc.get(&v)));
+                    _ => {
+                        let reg = regalloc.get(&v, dfg).unwrap();
+                        if reg != "a0" {
+                            instrs.push(format!("mv a0, {}", reg));
+                        }
+                    }
                 }
             }
             instrs.push("ret".to_string());
         }
         ValueKind::Binary(b) => {
-            let lhs_kd = dfg.value(b.lhs()).kind();
-            let rhs_kd = dfg.value(b.rhs()).kind();
-
-            // load integers and create registers
+            // Load or reate registers for operands.
+            // We have to judge whether the operand of a Koopa instruction is an integer
+            // because interger operands is allowed in koopa but not in RISC-V.
+            // We must manually add additional "li" instructions.
             let lhs_v: String;
-            if let ValueKind::Integer(i) = dfg.value(b.lhs()).kind() {
-                if i.value() == 0 {
-                    lhs_v = "x0".to_string();
-                } else {
-                    lhs_v = regalloc.allocate(b.lhs());
+            if matches!(dfg.value(b.lhs()).kind(), ValueKind::Integer(i) if i.value() != 0) {
+                lhs_v = regalloc.allocate(b.lhs(), dfg);
+                if let ValueKind::Integer(i) = dfg.value(b.lhs()).kind() {
                     instrs.push(format!("li {}, {}", lhs_v, i.value()));
                 }
             } else {
-                lhs_v = regalloc.get(&b.lhs());
+                lhs_v = regalloc.get(&b.lhs(), dfg).unwrap();
             }
             let rhs_v: String;
-            if let ValueKind::Integer(i) = dfg.value(b.rhs()).kind() {
-                if i.value() == 0 {
-                    rhs_v = "x0".to_string();
-                } else {
-                    rhs_v = regalloc.allocate(b.rhs());
+            if matches!(dfg.value(b.rhs()).kind(), ValueKind::Integer(i) if i.value() != 0) {
+                rhs_v = regalloc.allocate(b.rhs(), dfg);
+                if let ValueKind::Integer(i) = dfg.value(b.rhs()).kind() {
                     instrs.push(format!("li {}, {}", rhs_v, i.value()));
                 }
             } else {
-                rhs_v = regalloc.get(&b.rhs());
+                rhs_v = regalloc.get(&b.rhs(), dfg).unwrap();
             }
 
-            // decide the output register name
-            let regout: String;
-            if matches!(lhs_kd, ValueKind::Integer(_i) if _i.value() != 0) {
-                regout = regalloc.get(&b.lhs());
-                regalloc.put(value, &regout);
-            } else if matches!(rhs_kd, ValueKind::Integer(_i) if _i.value() != 0) {
-                regout = regalloc.get(&b.rhs());
-                regalloc.put(value, &regout);
-            } else {
-                // both not integer or both zero
-                regout = regalloc.allocate(value.clone());
-            }
+            // Allocate output register.
+            let regout: String = regalloc.allocate(value.clone(), dfg);
 
             match b.op() {
                 BinaryOp::Add

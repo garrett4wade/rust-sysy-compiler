@@ -54,9 +54,9 @@ pub enum OpCode {
     Not,
 }
 
-impl OpCode {
-    fn to_koopa_op(&self) -> BinaryOp {
-        match self {
+impl From<&OpCode> for BinaryOp {
+    fn from(value: &OpCode) -> Self {
+        match value {
             OpCode::Eq => BinaryOp::Eq,
             OpCode::Ne => BinaryOp::NotEq,
             OpCode::Le => BinaryOp::Le,
@@ -68,9 +68,8 @@ impl OpCode {
             OpCode::Mul => BinaryOp::Mul,
             OpCode::Div => BinaryOp::Div,
             OpCode::Mod => BinaryOp::Mod,
-            // special case
             OpCode::Not => BinaryOp::Eq,
-            _ => panic!("Invalid operator: {:?}", self),
+            _ => panic!("Invalid operator: {:?}", value),
         }
     }
 }
@@ -99,7 +98,7 @@ impl Expr {
                 OpCode::Sub | OpCode::Not => {
                     let l = dfg.new_value().integer(0);
                     let r = sub_expr.unroll(dfg, stack);
-                    let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
+                    let v = dfg.new_value().binary(op.into(), l, r);
                     stack.push(v);
                     v
                 }
@@ -127,7 +126,7 @@ impl Expr {
                         v
                     }
                     _ => {
-                        let v = dfg.new_value().binary(op.to_koopa_op(), l, r);
+                        let v = dfg.new_value().binary(op.into(), l, r);
                         stack.push(v);
                         v
                     }
