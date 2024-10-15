@@ -5,10 +5,9 @@ fun @main(): i32 {
   %0 = load @x
   %1 = add %0, 1
   store %1, @x
-  @y = alloc i32
   %2 = load @x
   %3 = add %2, 10
-  store %3, @y
+  store %3, @x
   %4 = load @x
   %5 = mul %4, 21
   ret %5

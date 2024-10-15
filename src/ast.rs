@@ -257,12 +257,22 @@ impl KoopaAST for BlockItem {
                             )?;
                         }
                         SymbolValue::Var(init) => {
-                            // Allocate variable and set its name.
-                            let v = func_data.dfg_mut().new_value().alloc(Type::get_i32());
-                            func_data
-                                .dfg_mut()
-                                .set_value_name(v, Some(format!("@{}", &sym.name)));
-                            instr_stack.push(v);
+                            // Allocate variable and set its name, if it has never been declared.
+                            let v: Value;
+                            if symtable.get(&sym.name).is_err() {
+                                v = func_data.dfg_mut().new_value().alloc(Type::get_i32());
+                                func_data
+                                    .dfg_mut()
+                                    .set_value_name(v, Some(format!("@{}", &sym.name)));
+                                instr_stack.push(v);
+                                symtable.insert(sym.name.clone(), SymEntry::Var(v))?;
+                            } else {
+                                if let SymEntry::Var(vv) = symtable.get(&sym.name).unwrap() {
+                                    v = vv.clone();
+                                } else {
+                                    panic!("Cannot declare a variable with the same name as a constant: {}", sym.name);
+                                }
+                            }
 
                             // Initialize the variable if given.
                             if let Some(init_value) = init {
@@ -274,8 +284,6 @@ impl KoopaAST for BlockItem {
                                 instr_stack
                                     .push(func_data.dfg_mut().new_value().store(iv, v.clone()));
                             }
-
-                            symtable.insert(sym.name.clone(), SymEntry::Var(v))?;
                         }
                     };
                 }
@@ -354,7 +362,7 @@ impl SymTable {
     fn get(&self, name: &String) -> Result<&SymEntry, String> {
         self.table
             .get(name)
-            .ok_or_else(|| format!("Symbol {} not found", name))
+            .ok_or_else(|| format!("Undefined symbol: {}", name))
     }
 
     fn insert(&mut self, k: String, v: SymEntry) -> Result<(), String> {
