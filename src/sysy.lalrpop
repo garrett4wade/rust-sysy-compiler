@@ -1,5 +1,4 @@
 use crate::ast::{CompUnit, FuncDef, FuncType, Block, BlockItem, Expr, OpCode, BType, Symbol, SymbolValue};
-use std::collections::HashMap;
 
 grammar;
 
@@ -33,6 +32,8 @@ pub Block: Block = "{" <items:(<BlockItem> ";")*> "}" => Block {<>};
 BlockItem: BlockItem = {
   "return" <e:Expr> => BlockItem::Ret(e),
   "const" <type_:BType> <v:List<ConstVarDef, ",">> => BlockItem::Decl(v),
+  <type_:BType> <v:List<VariableDef, ",">> => BlockItem::Decl(v),
+  <v:LVal> "=" <e:Expr> => BlockItem::Assign(v, e),
 };
 
 ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {
@@ -40,6 +41,14 @@ ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {
     name: k,
     value: SymbolValue::Const(e),
   }
+};
+
+VariableDef: Symbol = {
+  <k:Ident> "=" <e:Expr> => Symbol {
+    name: k,
+    value: SymbolValue::Var(Some(e)),
+  },
+  <k:Ident> => Symbol {name: k, value: SymbolValue::Var(None)},
 };
 
 BType: BType = {
@@ -66,6 +75,7 @@ UnaryExpr: Box<Expr> = {
 
 Term: Box<Expr> = {
   Number => Box::new(Expr::Number(<>)),
+  LVal => Box::new(Expr::Symbol(<>)),
   "(" <Expr> ")",
 }
 
@@ -106,6 +116,8 @@ UnaryOpCode: OpCode = {
   "-" => OpCode::Sub,
   "!" => OpCode::Not,
 }
+
+LVal: String = Ident;
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
 

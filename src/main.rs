@@ -2,7 +2,6 @@ use koopa::back::KoopaGenerator;
 use lalrpop_util::lalrpop_mod;
 use std::env::args;
 use std::fs::{read_to_string, File};
-use std::collections::HashMap;
 use std::io::prelude::*;
 
 pub mod asm;

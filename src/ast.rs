@@ -2,6 +2,8 @@ use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value};
 
+use std::collections::HashMap;
+
 // AST definition
 #[derive(Debug)]
 pub struct CompUnit {
@@ -27,23 +29,25 @@ pub struct Block {
 #[derive(Debug)]
 pub enum BlockItem {
     Decl(Vec<Symbol>),
+    Assign(String, Box<Expr>),
     Ret(Box<Expr>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Binary(Box<Expr>, OpCode, Box<Expr>),
     Unary(OpCode, Box<Expr>),
+    Symbol(String),
     Number(i32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Symbol {
     pub name: String,
     pub value: SymbolValue,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SymbolValue {
     Const(Box<Expr>),
     Var(Option<Box<Expr>>), // init val
@@ -54,7 +58,7 @@ pub enum BType {
     Int,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum OpCode {
     // lv 1
     LogicOr,
@@ -109,23 +113,28 @@ impl Expr {
         %1 = sub 0, %0
         ret %1
     */
-    fn unroll(&self, dfg: &mut DataFlowGraph, stack: &mut Vec<Value>) -> Value {
+    fn unroll(
+        &self,
+        dfg: &mut DataFlowGraph,
+        stack: &mut Vec<Value>,
+        symtable: &SymTable,
+    ) -> Value {
         match self {
             Expr::Number(n) => dfg.new_value().integer(n.clone()),
             Expr::Unary(op, sub_expr) => match op {
                 OpCode::Sub | OpCode::Not => {
                     let l = dfg.new_value().integer(0);
-                    let r = sub_expr.unroll(dfg, stack);
+                    let r = sub_expr.unroll(dfg, stack, symtable);
                     let v = dfg.new_value().binary(op.into(), l, r);
                     stack.push(v);
                     v
                 }
-                OpCode::Add => sub_expr.unroll(dfg, stack),
+                OpCode::Add => sub_expr.unroll(dfg, stack, symtable),
                 _ => panic!("Unsupported unary operator: {:?}", op),
             },
             Expr::Binary(lhs, op, rhs) => {
-                let l = lhs.unroll(dfg, stack);
-                let r = rhs.unroll(dfg, stack);
+                let l = lhs.unroll(dfg, stack, symtable);
+                let r = rhs.unroll(dfg, stack, symtable);
                 match op {
                     OpCode::LogicOr => {
                         let z = dfg.new_value().integer(0);
@@ -150,16 +159,27 @@ impl Expr {
                     }
                 }
             }
+            Expr::Symbol(name) => {
+                let symv = symtable.get(name).unwrap();
+                match symv {
+                    SymEntry::Const(v) => dfg.new_value().integer(v.clone()),
+                    SymEntry::Var(v) => {
+                        let v = dfg.new_value().load(v.clone());
+                        stack.push(v);
+                        v
+                    }
+                }
+            }
         }
     }
 
-    pub fn reduce(&self, dfg: &DataFlowGraph) -> i32 {
+    pub fn reduce(&self, dfg: &DataFlowGraph, symtable: &SymTable) -> i32 {
         match self {
             Expr::Number(n) => *n,
             Expr::Unary(op, sub_expr) => match op {
-                OpCode::Sub => -sub_expr.reduce(dfg),
+                OpCode::Sub => -sub_expr.reduce(dfg, symtable),
                 OpCode::Not => {
-                    let v = sub_expr.reduce(dfg);
+                    let v = sub_expr.reduce(dfg, symtable);
                     if v == 0 {
                         1
                     } else {
@@ -169,8 +189,8 @@ impl Expr {
                 _ => panic!("Unsupported unary operator: {:?}", op),
             },
             Expr::Binary(lhs, op, rhs) => {
-                let l = lhs.reduce(dfg);
-                let r = rhs.reduce(dfg);
+                let l = lhs.reduce(dfg, symtable);
+                let r = rhs.reduce(dfg, symtable);
                 match op {
                     OpCode::Add => l + r,
                     OpCode::Sub => l - r,
@@ -188,6 +208,16 @@ impl Expr {
                     OpCode::Not => panic!("Unsupported binary operator: {:?}", op),
                 }
             }
+            Expr::Symbol(name) => {
+                let symv = symtable.get(name).unwrap();
+                match symv {
+                    SymEntry::Const(v) => v.clone(),
+                    _ => panic!(
+                        "Cannot reduce an expression at compilation with a variable: {}",
+                        name
+                    ),
+                }
+            }
         }
     }
 }
@@ -197,6 +227,7 @@ pub trait KoopaAST {
     fn add_to_program(
         &self,
         program: &mut Program,
+        symtable: &mut SymTable,
         func: Option<&Function>,
         bb: Option<&BasicBlock>,
     ) -> Result<(), String>;
@@ -206,29 +237,73 @@ impl KoopaAST for BlockItem {
     fn add_to_program(
         &self,
         program: &mut Program,
+        symtable: &mut SymTable,
         func: Option<&Function>,
         bb: Option<&BasicBlock>,
     ) -> Result<(), String> {
+        let func_data = program.func_mut(*func.unwrap());
+        let mut instr_stack: Vec<Value> = vec![];
         match self {
-            BlockItem::Decl(_) => Ok(()), // TODO:
-            BlockItem::Ret(expr) => {
-                let func_data = program.func_mut(*func.unwrap());
-                let mut instr_stack: Vec<Value> = vec![];
+            BlockItem::Decl(symbols) => {
+                for sym in symbols.iter() {
+                    match &sym.value {
+                        SymbolValue::Const(expr) => {
+                            // Constants in the SysY language must be determined during compilation.
+                            // Just replace them with values recorded in the symbol table.
+                            // No need to add additional IR instructions.
+                            symtable.insert(
+                                sym.name.clone(),
+                                SymEntry::Const(expr.reduce(func_data.dfg(), &symtable)),
+                            )?;
+                        }
+                        SymbolValue::Var(init) => {
+                            // Allocate variable and set its name.
+                            let v = func_data.dfg_mut().new_value().alloc(Type::get_i32());
+                            func_data
+                                .dfg_mut()
+                                .set_value_name(v, Some(format!("@{}", &sym.name)));
+                            instr_stack.push(v);
 
+                            // Initialize the variable if given.
+                            if let Some(init_value) = init {
+                                let iv = init_value.unroll(
+                                    func_data.dfg_mut(),
+                                    &mut instr_stack,
+                                    &symtable,
+                                );
+                                instr_stack
+                                    .push(func_data.dfg_mut().new_value().store(iv, v.clone()));
+                            }
+
+                            symtable.insert(sym.name.clone(), SymEntry::Var(v))?;
+                        }
+                    };
+                }
+            }
+            BlockItem::Assign(name, expr) => {
+                let v = symtable.get(name).unwrap();
+                match v {
+                    SymEntry::Var(v) => {
+                        let exprv = expr.unroll(func_data.dfg_mut(), &mut instr_stack, &symtable);
+                        instr_stack.push(func_data.dfg_mut().new_value().store(exprv, v.clone()));
+                    }
+                    _ => panic!("Cannot assign to a constant: {}", name),
+                }
+            }
+            BlockItem::Ret(expr) => {
                 // Create instructions with recursion.
-                let retv = expr.unroll(func_data.dfg_mut(), &mut instr_stack);
+                let retv = expr.unroll(func_data.dfg_mut(), &mut instr_stack, &symtable);
                 // Return the final value.
                 instr_stack.push(func_data.dfg_mut().new_value().ret(Some(retv)));
-
-                // Record all instructions.
-                func_data
-                    .layout_mut()
-                    .bb_mut(*bb.unwrap())
-                    .insts_mut()
-                    .extend(instr_stack);
-                Ok(())
             }
         }
+        // Record all instructions.
+        func_data
+            .layout_mut()
+            .bb_mut(*bb.unwrap())
+            .insts_mut()
+            .extend(instr_stack);
+        Ok(())
     }
 }
 
@@ -236,6 +311,7 @@ impl KoopaAST for FuncDef {
     fn add_to_program(
         &self,
         program: &mut Program,
+        symtable: &mut SymTable,
         _: Option<&Function>,
         _: Option<&BasicBlock>,
     ) -> Result<(), String> {
@@ -254,16 +330,55 @@ impl KoopaAST for FuncDef {
             .basic_block(Some("%entry".into()));
         func_data.layout_mut().bbs_mut().extend([entry]);
         for item in self.block.items.iter() {
-            item.add_to_program(program, Some(&function), Some(&entry))?;
+            item.add_to_program(program, symtable, Some(&function), Some(&entry))?;
         }
         Ok(())
     }
 }
 
+enum SymEntry {
+    Const(i32),
+    Var(Value),
+}
+pub struct SymTable {
+    table: HashMap<String, SymEntry>,
+}
+
+impl SymTable {
+    fn new() -> Self {
+        SymTable {
+            table: HashMap::new(),
+        }
+    }
+
+    fn get(&self, name: &String) -> Result<&SymEntry, String> {
+        self.table
+            .get(name)
+            .ok_or_else(|| format!("Symbol {} not found", name))
+    }
+
+    fn insert(&mut self, k: String, v: SymEntry) -> Result<(), String> {
+        match v {
+            SymEntry::Const(_) => {
+                if self.table.contains_key(&k) {
+                    return Err(format!("Const symbol {} cannot be defined twice", k));
+                }
+                self.table.insert(k, v);
+                Ok(())
+            }
+            SymEntry::Var(_) => {
+                self.table.insert(k, v);
+                Ok(())
+            }
+        }
+    }
+}
+
 pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
     let mut program: Program = Program::new();
+    let mut symtable = SymTable::new();
     comp_unit
         .func_def
-        .add_to_program(&mut program, None, None)?;
+        .add_to_program(&mut program, &mut symtable, None, None)?;
     Ok(program)
 }
