@@ -1,4 +1,6 @@
-use crate::reg::RegAllocator;
+use std::collections::HashMap;
+
+// use crate::reg::RegAllocator;
 use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::{BinaryOp, Program, Value, ValueKind};
 
@@ -57,63 +59,109 @@ fn binary_op_to_riscv_instr(op: &BinaryOp) -> &str {
         _ => panic!("Not implemented"),
     }
 }
+#[derive(Debug)]
+struct StackFrame {
+    size: usize,
+    sp: usize,
+    vars: HashMap<Value, usize>,
+}
 
+impl StackFrame {
+    fn new(size: usize) -> Self {
+        StackFrame {
+            size: size,
+            sp: 0,
+            vars: HashMap::new(),
+        }
+    }
+
+    fn allocate(&mut self, dfg: &DataFlowGraph, value: Value) -> Result<usize, String> {
+        let value_data = dfg.value(value);
+        if value_data.ty().is_unit() {
+            // This instruction does not have a return value. Do nothing.
+            return Err("non-return type can't be allocated on the stack".to_string());
+        }
+        let size = value_data.ty().size();
+        let pos = self.sp;
+        self.sp += size;
+        if self.sp > self.size {
+            return Err(format!("Stack overflow on {:?}, size: {}, sp: {}", value_data, self.size, self.sp));
+        }
+        if self.vars.contains_key(&value) {
+            return Err(format!("Variable already exists: {:?}", value_data));
+        }
+        self.vars.insert(value, pos);
+        Ok(pos)
+    }
+
+    fn get_sp(&self, value: &Value) -> Result<usize, String> {
+        self.vars
+            .get(value)
+            .cloned()
+            .ok_or_else(|| format!("Variable not found: {:?}", value))
+    }
+}
+
+fn load_var_or_const(
+    dfg: &DataFlowGraph,
+    value: &Value,
+    stack_frame: &StackFrame,
+    instrs: &mut Vec<String>,
+    reg: &String,
+) {
+    match dfg.value(value.clone()).kind() {
+        ValueKind::Integer(i) => {
+            instrs.push(format!("li {}, {}", reg, i.value()));
+        }
+        _ => {
+            let sp = stack_frame.get_sp(value).unwrap();
+            instrs.push(format!("lw {}, {}(sp)", reg, sp));
+        }
+    }
+}
 // Generate RISC-V ASM for one instruction, given the handle of this IR.
 fn generate_one_inst(
     dfg: &DataFlowGraph,
     value: &Value,
-    regalloc: &mut RegAllocator,
+    stack_frame: &mut StackFrame,
     instrs: &mut Vec<String>,
 ) {
     let vd = dfg.value(value.clone());
     match vd.kind() {
+        ValueKind::Alloc(_) => {
+            // "alloc" does not correspond to any RISC-V instruction.
+            stack_frame.allocate(dfg, value.clone()).unwrap();
+        }
+        ValueKind::Store(s) => {
+            load_var_or_const(dfg, &s.value(), stack_frame, instrs, &"t0".to_string());
+            instrs.push(format!(
+                "sw {}, {}(sp)",
+                "t0",
+                stack_frame.get_sp(&s.dest()).unwrap()
+            ));
+        }
+        ValueKind::Load(l) => {
+            instrs.push(format!(
+                "lw {}, {}(sp)",
+                "t0",
+                stack_frame.get_sp(&l.src()).unwrap()
+            ));
+            let sp = stack_frame.allocate(dfg, value.clone()).unwrap();
+            instrs.push(format!("sw {}, {}(sp)", "t0", sp));
+        }
         ValueKind::Return(r) => {
             let ret_v = r.value();
             if let Some(v) = ret_v {
-                match dfg.value(v).kind() {
-                    ValueKind::Integer(i) => {
-                        if i.value() != 0 {
-                            instrs.push(format!("li a0, {}", i.value()));
-                        } else {
-                            instrs.push("mv a0, x0".to_string());
-                        }
-                    }
-                    _ => {
-                        let reg = regalloc.get(&v, dfg).unwrap();
-                        if reg != "a0" {
-                            instrs.push(format!("mv a0, {}", reg));
-                        }
-                    }
-                }
+                load_var_or_const(dfg, &v, stack_frame, instrs, &"a0".to_string());
             }
-            instrs.push("ret".to_string());
         }
         ValueKind::Binary(b) => {
-            // Load or reate registers for operands.
-            // We have to judge whether the operand of a Koopa instruction is an integer
-            // because interger operands is allowed in koopa but not in RISC-V.
-            // We must manually add additional "li" instructions.
-            let lhs_v: String;
-            if matches!(dfg.value(b.lhs()).kind(), ValueKind::Integer(i) if i.value() != 0) {
-                lhs_v = regalloc.allocate(b.lhs(), dfg);
-                if let ValueKind::Integer(i) = dfg.value(b.lhs()).kind() {
-                    instrs.push(format!("li {}, {}", lhs_v, i.value()));
-                }
-            } else {
-                lhs_v = regalloc.get(&b.lhs(), dfg).unwrap();
-            }
-            let rhs_v: String;
-            if matches!(dfg.value(b.rhs()).kind(), ValueKind::Integer(i) if i.value() != 0) {
-                rhs_v = regalloc.allocate(b.rhs(), dfg);
-                if let ValueKind::Integer(i) = dfg.value(b.rhs()).kind() {
-                    instrs.push(format!("li {}, {}", rhs_v, i.value()));
-                }
-            } else {
-                rhs_v = regalloc.get(&b.rhs(), dfg).unwrap();
-            }
+            let lhs_v = "t0".to_string();
+            let rhs_v = "t1".to_string();
+            load_var_or_const(dfg, &b.lhs(), stack_frame, instrs, &lhs_v);
+            load_var_or_const(dfg, &b.rhs(), stack_frame, instrs, &rhs_v);
 
-            // Allocate output register.
-            let regout: String = regalloc.allocate(value.clone(), dfg);
+            let regout: String = "t0".to_string();
 
             match b.op() {
                 BinaryOp::Add
@@ -163,6 +211,9 @@ fn generate_one_inst(
                 }
                 _ => unreachable!("Not implemented"),
             }
+
+            let sp = stack_frame.allocate(dfg, value.clone()).unwrap();
+            instrs.push(format!("sw {}, {}(sp)", regout, sp));
         }
         _ => {
             panic!("Not implemented");
@@ -175,28 +226,46 @@ pub fn build_riscv(program: &Program) -> String {
     riscv.push(format!("{}.text", INDENT));
     riscv.push(format!("{}.globl main", INDENT));
     for (_, func_data) in program.funcs() {
-        let mut func_instrs: Vec<String> = vec![];
-
+        // Function name. Remove the starting "@" or "%".
+        riscv.push(format!("{}:", &func_data.name()[1..]));
         // Get the global DFG handle.
         let dfg = func_data.dfg();
+
+        // prologue
+        let mut ss = 0usize;
+        for (_, bb_node) in func_data.layout().bbs() {
+            for (inst, _) in bb_node.insts() {
+                let t = dfg.value(inst.clone()).ty();
+                let s = t.size();
+                ss += s * (1 - t.is_unit() as usize);
+            }
+        }
+        ss = (ss + 15) / 16 * 16; // Round to multiple of 16.
+        riscv.push(format!("{}addi sp, sp, -{}", INDENT, ss));
+
+        // Instruction placeholders.
+        let mut func_instrs: Vec<String> = vec![];
+        let mut stack_frame = StackFrame::new(ss);
 
         // Basic blocks.
         for (_, bb_node) in func_data.layout().bbs() {
             // BB instructions.
             // For now, re-allocate all temporary registers for each BB.
-            let mut regalloc = RegAllocator::new();
+            // let mut regalloc = RegAllocator::new();
             let mut bb_instrs: Vec<String> = vec![];
             for (inst_v, _) in bb_node.insts() {
-                generate_one_inst(dfg, inst_v, &mut regalloc, &mut bb_instrs);
+                generate_one_inst(dfg, inst_v, &mut stack_frame, &mut bb_instrs);
             }
             func_instrs.extend(bb_instrs);
         }
 
-        // Function name. Remove the starting "@" or "%".
-        riscv.push(format!("{}:", &func_data.name()[1..]));
         for instr in func_instrs.into_iter() {
             riscv.push(format!("{}{}", INDENT, instr));
         }
+
+        // epilogue
+        riscv.push(format!("{}addi sp, sp, {}", INDENT, ss));
+        riscv.push(format!("{}ret", INDENT));
     }
     riscv.join("\n")
 }
