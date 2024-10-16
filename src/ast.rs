@@ -2,8 +2,10 @@ use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value};
 
+use std::cell::RefCell;
 use std::collections::HashMap;
-
+use std::iter;
+use std::rc::Rc;
 // AST definition
 #[derive(Debug)]
 pub struct CompUnit {
@@ -31,6 +33,8 @@ pub enum BlockItem {
     Decl(Vec<Symbol>),
     Assign(String, Box<Expr>),
     Ret(Box<Expr>),
+    Block(Block),
+    Expr(Option<Box<Expr>>),
 }
 
 #[derive(Debug, Clone)]
@@ -241,7 +245,6 @@ impl KoopaAST for BlockItem {
         func: Option<&Function>,
         bb: Option<&BasicBlock>,
     ) -> Result<(), String> {
-        let func_data = program.func_mut(*func.unwrap());
         let mut instr_stack: Vec<Value> = vec![];
         match self {
             BlockItem::Decl(symbols) => {
@@ -253,14 +256,21 @@ impl KoopaAST for BlockItem {
                             // No need to add additional IR instructions.
                             symtable.insert(
                                 sym.name.clone(),
-                                SymEntry::Const(expr.reduce(func_data.dfg(), &symtable)),
+                                SymEntry::Const(
+                                    expr.reduce(program.func_mut(*func.unwrap()).dfg(), &symtable),
+                                ),
                             )?;
                         }
                         SymbolValue::Var(init) => {
                             // Allocate variable and set its name, if it has never been declared.
                             let v: Value;
-                            v = func_data.dfg_mut().new_value().alloc(Type::get_i32());
-                            func_data
+                            v = program
+                                .func_mut(*func.unwrap())
+                                .dfg_mut()
+                                .new_value()
+                                .alloc(Type::get_i32());
+                            program
+                                .func_mut(*func.unwrap())
                                 .dfg_mut()
                                 .set_value_name(v, Some(format!("@{}", &sym.name)));
                             instr_stack.push(v);
@@ -269,12 +279,17 @@ impl KoopaAST for BlockItem {
                             // Initialize the variable if given.
                             if let Some(init_value) = init {
                                 let iv = init_value.unroll(
-                                    func_data.dfg_mut(),
+                                    program.func_mut(*func.unwrap()).dfg_mut(),
                                     &mut instr_stack,
                                     &symtable,
                                 );
-                                instr_stack
-                                    .push(func_data.dfg_mut().new_value().store(iv, v.clone()));
+                                instr_stack.push(
+                                    program
+                                        .func_mut(*func.unwrap())
+                                        .dfg_mut()
+                                        .new_value()
+                                        .store(iv, v.clone()),
+                                );
                             }
                         }
                     };
@@ -284,21 +299,50 @@ impl KoopaAST for BlockItem {
                 let v = symtable.get(name).unwrap();
                 match v {
                     SymEntry::Var(v) => {
-                        let exprv = expr.unroll(func_data.dfg_mut(), &mut instr_stack, &symtable);
-                        instr_stack.push(func_data.dfg_mut().new_value().store(exprv, v.clone()));
+                        let exprv = expr.unroll(
+                            program.func_mut(*func.unwrap()).dfg_mut(),
+                            &mut instr_stack,
+                            &symtable,
+                        );
+                        instr_stack.push(
+                            program
+                                .func_mut(*func.unwrap())
+                                .dfg_mut()
+                                .new_value()
+                                .store(exprv, v.clone()),
+                        );
                     }
                     _ => panic!("Cannot assign to a constant: {}", name),
                 }
             }
             BlockItem::Ret(expr) => {
                 // Create instructions with recursion.
-                let retv = expr.unroll(func_data.dfg_mut(), &mut instr_stack, &symtable);
+                let retv = expr.unroll(
+                    program.func_mut(*func.unwrap()).dfg_mut(),
+                    &mut instr_stack,
+                    &symtable,
+                );
                 // Return the final value.
-                instr_stack.push(func_data.dfg_mut().new_value().ret(Some(retv)));
+                instr_stack.push(
+                    program
+                        .func_mut(*func.unwrap())
+                        .dfg_mut()
+                        .new_value()
+                        .ret(Some(retv)),
+                );
+            }
+            BlockItem::Block(block) => {
+                symtable.fork();
+                block.add_to_program(program, symtable, func, bb)?;
+                symtable.join()?;
+            }
+            BlockItem::Expr(_) => {
+                // Do nothing.
             }
         }
         // Record all instructions.
-        func_data
+        program
+            .func_mut(*func.unwrap())
             .layout_mut()
             .bb_mut(*bb.unwrap())
             .insts_mut()
@@ -307,6 +351,20 @@ impl KoopaAST for BlockItem {
     }
 }
 
+impl KoopaAST for Block {
+    fn add_to_program(
+        &self,
+        program: &mut Program,
+        symtable: &mut SymTable,
+        func: Option<&Function>,
+        bb: Option<&BasicBlock>,
+    ) -> Result<(), String> {
+        for item in self.items.iter() {
+            item.add_to_program(program, symtable, func, bb)?;
+        }
+        Ok(())
+    }
+}
 impl KoopaAST for FuncDef {
     fn add_to_program(
         &self,
@@ -329,39 +387,57 @@ impl KoopaAST for FuncDef {
             .new_bb()
             .basic_block(Some("%entry".into()));
         func_data.layout_mut().bbs_mut().extend([entry]);
-        for item in self.block.items.iter() {
-            item.add_to_program(program, symtable, Some(&function), Some(&entry))?;
-        }
+        self.block
+            .add_to_program(program, symtable, Some(&function), Some(&entry))?;
         Ok(())
     }
 }
 
+#[derive(Debug, Clone)]
 enum SymEntry {
     Const(i32),
     Var(Value),
 }
 pub struct SymTable {
-    table: HashMap<String, SymEntry>,
+    parent: Vec<Rc<RefCell<HashMap<String, SymEntry>>>>,
+    table: Rc<RefCell<HashMap<String, SymEntry>>>,
 }
 
 impl SymTable {
     fn new() -> Self {
         SymTable {
-            table: HashMap::new(),
+            parent: vec![],
+            table: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
-    fn get(&self, name: &String) -> Result<&SymEntry, String> {
-        self.table
-            .get(name)
-            .ok_or_else(|| format!("Undefined symbol: {}", name))
+    fn fork(&mut self) {
+        self.parent.push(self.table.clone());
+        self.table = Rc::new(RefCell::new(HashMap::new()));
+    }
+
+    fn join(&mut self) -> Result<(), String> {
+        self.table = self
+            .parent
+            .pop()
+            .ok_or_else(|| "Cannot join the root symbol table".to_string())?;
+        Ok(())
+    }
+
+    fn get(&self, name: &String) -> Result<SymEntry, String> {
+        for tab in iter::once(&self.table).chain(self.parent.iter().rev()) {
+            if let Some(v) = tab.borrow().get(name) {
+                return Ok(v.clone());
+            }
+        }
+        Err(format!("Undefined symbol: {}", name))
     }
 
     fn insert(&mut self, k: String, v: SymEntry) -> Result<(), String> {
-        if self.table.contains_key(&k) {
+        if self.table.borrow().contains_key(&k) {
             return Err(format!("Symbol {} cannot be defined twice", k));
         }
-        self.table.insert(k, v);
+        self.table.borrow_mut().insert(k, v);
         Ok(())
     }
 }

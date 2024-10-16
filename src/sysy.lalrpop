@@ -27,13 +27,15 @@ pub FuncType: FuncType = {
     "int" => FuncType::Int,
 }
 
-pub Block: Block = "{" <items:(<BlockItem> ";")*> "}" => Block {<>};
+pub Block: Block = "{" <items:(<BlockItem>)*> "}" => Block {<>};
 
 BlockItem: BlockItem = {
-  "return" <e:Expr> => BlockItem::Ret(e),
-  "const" <type_:BType> <v:List<ConstVarDef, ",">> => BlockItem::Decl(v),
-  <type_:BType> <v:List<VariableDef, ",">> => BlockItem::Decl(v),
-  <v:LVal> "=" <e:Expr> => BlockItem::Assign(v, e),
+  "return" <e:Expr> ";" => BlockItem::Ret(e),
+  "const" <type_:BType> <v:List<ConstVarDef, ",">> ";" => BlockItem::Decl(v),
+  <type_:BType> <v:List<VariableDef, ",">> ";" => BlockItem::Decl(v),
+  <v:LVal> "=" <e:Expr> ";" => BlockItem::Assign(v, e),
+  Block => BlockItem::Block(<>),
+  <e:Expr?> ";" => BlockItem::Expr(e),
 };
 
 ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {
