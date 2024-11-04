@@ -4,8 +4,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{Block, BlockItem, CompUnit, FuncType};
 use crate::symtable::{SymEntry, SymTable};
-// Converting an AST to Koopa IR using koopa::ir API.
 
+fn is_bb_returned(program: &Program, func: &Function, bb: &BasicBlock) -> bool {
+    let insts = program.func(*func).layout().bbs().node(bb).unwrap().insts();
+    insts
+        .back_key()
+        .map(|x| {
+            matches!(
+                program.func(*func).dfg().value(x.clone()).kind(),
+                ValueKind::Return(_)
+            )
+        })
+        .unwrap_or(false)
+}
+
+// Converting an AST to Koopa IR using koopa::ir API.
 impl BlockItem {
     fn add_to_bb(
         &self,
@@ -79,18 +92,6 @@ impl BlockItem {
     }
 }
 
-fn is_bb_returned(program: &Program, func: &Function, bb: &BasicBlock) -> bool {
-    let insts = program.func(*func).layout().bbs().node(bb).unwrap().insts();
-    insts
-        .back_key()
-        .map(|x| {
-            matches!(
-                program.func(*func).dfg().value(x.clone()).kind(),
-                ValueKind::Return(_)
-            )
-        })
-        .unwrap_or(false)
-}
 impl Block {
     fn add_to_bb(
         &self,
