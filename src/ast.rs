@@ -1,6 +1,5 @@
-use koopa::ir::builder::{LocalInstBuilder, ValueBuilder};
 use koopa::ir::dfg::DataFlowGraph;
-use koopa::ir::{BinaryOp, Type, Value};
+use koopa::ir::BinaryOp;
 
 use crate::symtable::{SymEntry, SymTable};
 // AST definition
@@ -59,45 +58,6 @@ pub enum SymbolValue {
     Var(Option<Box<Expr>>), // init val
 }
 
-impl Symbol {
-    pub fn decl_symbol(
-        &self,
-        dfg: &mut DataFlowGraph,
-        symtable: &mut SymTable,
-        instr_stack: &mut Vec<Value>,
-    ) {
-        match &self.value {
-            SymbolValue::Const(expr) => {
-                // Constants in the SysY language must be determined during compilation.
-                // Just replace them with values recorded in the symbol table.
-                // No need to add additional IR instructions.
-                symtable
-                    .insert(
-                        self.name.clone(),
-                        SymEntry::Const(expr.reduce(dfg, &symtable)),
-                    )
-                    .unwrap();
-            }
-            SymbolValue::Var(init) => {
-                // Allocate variable and set its name, if it has never been declared.
-                let v: Value;
-                v = dfg.new_value().alloc(Type::get_i32());
-                dfg.set_value_name(v, Some(format!("@{}", &self.name)));
-                instr_stack.push(v);
-                symtable
-                    .insert(self.name.clone(), SymEntry::Var(v))
-                    .unwrap();
-
-                // Initialize the variable if given.
-                if let Some(init_value) = init {
-                    let iv = init_value.unroll(dfg, instr_stack, &symtable);
-                    instr_stack.push(dfg.new_value().store(iv, v.clone()));
-                }
-            }
-        };
-    }
-}
-
 #[derive(Debug)]
 pub enum BType {
     Int,
@@ -149,75 +109,6 @@ impl From<&OpCode> for BinaryOp {
 }
 
 impl Expr {
-    /*
-    Unwrap a single-line command into a series of IR instructions.
-    A single-line command may contain many operations, e.g., `return -(!2)`.
-    We should decompose it into a series of binary instructions, e.g.,
-    %entry:
-        %0 = eq 0, 2
-        %1 = sub 0, %0
-        ret %1
-    */
-    pub fn unroll(
-        &self,
-        dfg: &mut DataFlowGraph,
-        stack: &mut Vec<Value>,
-        symtable: &SymTable,
-    ) -> Value {
-        match self {
-            Expr::Number(n) => dfg.new_value().integer(n.clone()),
-            Expr::Unary(op, sub_expr) => match op {
-                OpCode::Sub | OpCode::Not => {
-                    let l = dfg.new_value().integer(0);
-                    let r = sub_expr.unroll(dfg, stack, symtable);
-                    let v = dfg.new_value().binary(op.into(), l, r);
-                    stack.push(v);
-                    v
-                }
-                OpCode::Add => sub_expr.unroll(dfg, stack, symtable),
-                _ => panic!("Unsupported unary operator: {:?}", op),
-            },
-            Expr::Binary(lhs, op, rhs) => {
-                let l = lhs.unroll(dfg, stack, symtable);
-                let r = rhs.unroll(dfg, stack, symtable);
-                match op {
-                    OpCode::LogicOr => {
-                        let z = dfg.new_value().integer(0);
-                        let lneq0 = dfg.new_value().binary(BinaryOp::NotEq, l, z);
-                        let rneq0 = dfg.new_value().binary(BinaryOp::NotEq, r, z);
-                        let v = dfg.new_value().binary(BinaryOp::Or, lneq0, rneq0);
-                        stack.extend([lneq0, rneq0, v]);
-                        v
-                    }
-                    OpCode::LogicAnd => {
-                        let z = dfg.new_value().integer(0);
-                        let lneq0 = dfg.new_value().binary(BinaryOp::NotEq, l, z);
-                        let rneq0 = dfg.new_value().binary(BinaryOp::NotEq, r, z);
-                        let v = dfg.new_value().binary(BinaryOp::And, lneq0, rneq0);
-                        stack.extend([lneq0, rneq0, v]);
-                        v
-                    }
-                    _ => {
-                        let v = dfg.new_value().binary(op.into(), l, r);
-                        stack.push(v);
-                        v
-                    }
-                }
-            }
-            Expr::Symbol(name) => {
-                let symv = symtable.get(name).unwrap();
-                match symv {
-                    SymEntry::Const(v) => dfg.new_value().integer(v.clone()),
-                    SymEntry::Var(v) => {
-                        let v = dfg.new_value().load(v.clone());
-                        stack.push(v);
-                        v
-                    }
-                }
-            }
-        }
-    }
-
     pub fn reduce(&self, dfg: &DataFlowGraph, symtable: &SymTable) -> i32 {
         match self {
             Expr::Number(n) => *n,

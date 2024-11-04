@@ -52,8 +52,7 @@ impl RegAllocator {
         let idx = self.slots.iter().next().cloned().unwrap();
         self.slots.remove(&idx);
         self.regidx.insert(value.clone(), idx);
-        self.used_by
-            .insert(value.clone(), data.used_by().clone());
+        self.used_by.insert(value.clone(), data.used_by().clone());
         idx
     }
 
