@@ -85,7 +85,10 @@ impl StackFrame {
         let pos = self.sp;
         self.sp += size;
         if self.sp > self.size {
-            return Err(format!("Stack overflow on {:?}, size: {}, sp: {}", value_data, self.size, self.sp));
+            return Err(format!(
+                "Stack overflow on {:?}, size: {}, sp: {}",
+                value_data, self.size, self.sp
+            ));
         }
         if self.vars.contains_key(&value) {
             return Err(format!("Variable already exists: {:?}", value_data));
@@ -154,6 +157,25 @@ fn generate_one_inst(
             if let Some(v) = ret_v {
                 load_var_or_const(dfg, &v, stack_frame, instrs, &"a0".to_string());
             }
+        }
+        ValueKind::Branch(b) => {
+            let reg = "t0".to_string();
+            load_var_or_const(dfg, &b.cond(), stack_frame, instrs, &reg);
+            instrs.push(format!(
+                "bnez {}, {}",
+                reg,
+                dfg.bb(b.true_bb()).name().as_ref().unwrap()[1..].to_string()
+            ));
+            instrs.push(format!(
+                "j {}",
+                dfg.bb(b.false_bb()).name().as_ref().unwrap()[1..].to_string()
+            ));
+        }
+        ValueKind::Jump(j) => {
+            instrs.push(format!(
+                "j {}",
+                dfg.bb(j.target()).name().as_ref().unwrap()[1..].to_string()
+            ));
         }
         ValueKind::Binary(b) => {
             let lhs_v = "t0".to_string();
@@ -241,31 +263,45 @@ pub fn build_riscv(program: &Program) -> String {
             }
         }
         ss = (ss + 15) / 16 * 16; // Round to multiple of 16.
-        riscv.push(format!("{}addi sp, sp, -{}", INDENT, ss));
+        if ss > 0 {
+            riscv.push(format!("{}addi sp, sp, -{}", INDENT, ss));
+        }
 
         // Instruction placeholders.
-        let mut func_instrs: Vec<String> = vec![];
+        let mut func_instrs: Vec<Vec<String>> = vec![];
+        let mut func_bbs: Vec<String> = vec![];
         let mut stack_frame = StackFrame::new(ss);
 
         // Basic blocks.
-        for (_, bb_node) in func_data.layout().bbs() {
+        for (bb, bb_node) in func_data.layout().bbs() {
+            // BB name. Remove the starting "@" or "%".
+            func_bbs.push(dfg.bb(bb.clone()).name().as_ref().unwrap()[1..].to_string());
             // BB instructions.
             // For now, re-allocate all temporary registers for each BB.
             // let mut regalloc = RegAllocator::new();
             let mut bb_instrs: Vec<String> = vec![];
             for (inst_v, _) in bb_node.insts() {
                 generate_one_inst(dfg, inst_v, &mut stack_frame, &mut bb_instrs);
+                if matches!(dfg.value(inst_v.clone()).kind(), ValueKind::Return(_)) {
+                    // epilogue
+                    if ss > 0 {
+                        bb_instrs.push(format!("addi sp, sp, {}", ss));
+                    }
+                    bb_instrs.push("ret".to_string());
+                    break;
+                }
             }
-            func_instrs.extend(bb_instrs);
+            func_instrs.push(bb_instrs);
         }
 
-        for instr in func_instrs.into_iter() {
-            riscv.push(format!("{}{}", INDENT, instr));
+        for (i, (bb_instrs, bb_name)) in func_instrs.into_iter().zip(func_bbs).enumerate() {
+            if i > 0 {
+                riscv.push(format!("{}:", bb_name));
+            }
+            for instr in bb_instrs.into_iter() {
+                riscv.push(format!("{}{}", INDENT, instr));
+            }
         }
-
-        // epilogue
-        riscv.push(format!("{}addi sp, sp, {}", INDENT, ss));
-        riscv.push(format!("{}ret", INDENT));
     }
     riscv.join("\n")
 }

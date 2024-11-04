@@ -1,0 +1,14 @@
+  .text
+  .globl main
+main:
+  li t0, 1
+  bnez t0, if0
+  j if0else
+if0:
+  li a0, 1
+  ret
+if0else:
+  j fi0
+fi0:
+  li a0, 0
+  ret
