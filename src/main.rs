@@ -6,6 +6,7 @@ use std::io::prelude::*;
 
 pub mod asm;
 pub mod ast;
+mod symtable;
 // pub mod reg;
 lalrpop_mod!(
     #[allow(clippy::ptr_arg)]
