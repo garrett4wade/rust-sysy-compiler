@@ -6,6 +6,7 @@ use std::io::prelude::*;
 
 pub mod asm;
 pub mod ast;
+mod koo;
 mod symtable;
 // pub mod reg;
 lalrpop_mod!(
@@ -37,7 +38,7 @@ fn main() -> Result<(), String> {
 
     // Convert the AST data structure into Koopa IR using
     // Koopa IR Rust APIs.
-    let program = ast::build_program(&ast).unwrap();
+    let program = koo::build_program(&ast).unwrap();
 
     if _mode == "-koopa" {
         let mut gen = KoopaGenerator::new(vec![]);
