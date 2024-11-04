@@ -29,7 +29,19 @@ pub FuncType: FuncType = {
 
 pub Block: Block = "{" <items:(<BlockItem>)*> "}" => Block {<>};
 
-BlockItem: BlockItem = {
+BlockItem: BlockItem = {OpenBlockItem, CloseBlockItem};
+
+OpenBlockItem: BlockItem = {
+  "if" "(" <cond:Expr> ")" <then_block:BlockItem> => BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: None},
+  "if" "(" <cond:Expr> ")" <then_block:CloseBlockItem> "else" <else_block:OpenBlockItem> =>  BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: Some(Box::new(else_block))},
+}
+
+CloseBlockItem: BlockItem = {
+  NonIfBlockItem,
+  "if" "(" <cond:Expr> ")" <then_block:CloseBlockItem> "else" <else_block:CloseBlockItem> =>  BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: Some(Box::new(else_block))},
+}
+
+NonIfBlockItem: BlockItem = {
   "return" <e:Expr> ";" => BlockItem::Ret(e),
   "const" <type_:BType> <v:List<ConstVarDef, ",">> ";" => BlockItem::Decl(v),
   <type_:BType> <v:List<VariableDef, ",">> ";" => BlockItem::Decl(v),

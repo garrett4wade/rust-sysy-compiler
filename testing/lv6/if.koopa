@@ -1,0 +1,97 @@
+fun @main(): i32 {
+%entry:
+  @a = alloc i32
+  %0 = ne 2, 0
+  %1 = ne 3, 0
+  %2 = and %0, %1
+  %3 = ne 1, 0
+  %4 = ne %2, 0
+  %5 = or %3, %4
+  store %5, @a
+  @b = alloc i32
+  %6 = ne 0, 0
+  %7 = ne 1, 0
+  %8 = and %6, %7
+  %9 = ne %8, 0
+  %10 = ne 0, 0
+  %11 = or %9, %10
+  store %11, @b
+  @c = alloc i32
+  %12 = ne 1, 0
+  %13 = ne 0, 0
+  %14 = and %12, %13
+  %15 = ne %14, 0
+  %16 = ne 1, 0
+  %17 = or %15, %16
+  %18 = mul %17, 4
+  store %18, @c
+  @d = alloc i32
+  store 5, @d
+  %19 = load @a
+  %20 = eq %19, 1
+  %21 = load @a
+  %22 = eq %21, 2
+  %23 = ne %20, 0
+  %24 = ne %22, 0
+  %25 = or %23, %24
+  br %25, %if0, %if0else
+
+%if0:
+  jump %fi0
+
+%if0else:
+  jump %fi0
+
+%fi0:
+  %26 = load @b
+  %27 = eq %26, 0
+  %28 = load @b
+  %29 = eq %28, 1
+  %30 = ne %27, 0
+  %31 = ne %29, 0
+  %32 = or %30, %31
+  br %32, %if1, %if1else
+
+%if1:
+  %33 = load @d
+  %34 = add %33, 1
+  store %34, @d
+  jump %fi1
+
+%if1else:
+  jump %fi1
+
+%fi1:
+  %35 = load @a
+  %36 = load @b
+  %37 = ne %35, 0
+  %38 = ne %36, 0
+  %39 = and %37, %38
+  %40 = load @c
+  %41 = load @d
+  %42 = ne %40, 0
+  %43 = ne %41, 0
+  %44 = and %42, %43
+  %45 = ne %39, 0
+  %46 = ne %44, 0
+  %47 = or %45, %46
+  br %47, %if2, %if2else
+
+%if2:
+  %48 = load @d
+  %49 = add %48, 1
+  store %49, @d
+  jump %fi2
+
+%if2else:
+  jump %fi2
+
+%fi2:
+  %50 = load @d
+  %51 = load @c
+  %52 = eq 0, %51
+  %53 = ne %50, 0
+  %54 = ne %52, 0
+  %55 = or %53, %54
+  ret %55
+}
