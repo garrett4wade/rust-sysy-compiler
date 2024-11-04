@@ -64,7 +64,7 @@ impl Symbol {
     fn decl_symbol(
         &self,
         program: &mut Program,
-        func: Option<&Function>,
+        func: &Function,
         symtable: &mut SymTable,
         instr_stack: &mut Vec<Value>,
     ) {
@@ -76,9 +76,7 @@ impl Symbol {
                 symtable
                     .insert(
                         self.name.clone(),
-                        SymEntry::Const(
-                            expr.reduce(program.func_mut(*func.unwrap()).dfg(), &symtable),
-                        ),
+                        SymEntry::Const(expr.reduce(program.func_mut(*func).dfg(), &symtable)),
                     )
                     .unwrap();
             }
@@ -86,12 +84,12 @@ impl Symbol {
                 // Allocate variable and set its name, if it has never been declared.
                 let v: Value;
                 v = program
-                    .func_mut(*func.unwrap())
+                    .func_mut(*func)
                     .dfg_mut()
                     .new_value()
                     .alloc(Type::get_i32());
                 program
-                    .func_mut(*func.unwrap())
+                    .func_mut(*func)
                     .dfg_mut()
                     .set_value_name(v, Some(format!("@{}", &self.name)));
                 instr_stack.push(v);
@@ -102,13 +100,13 @@ impl Symbol {
                 // Initialize the variable if given.
                 if let Some(init_value) = init {
                     let iv = init_value.unroll(
-                        program.func_mut(*func.unwrap()).dfg_mut(),
+                        program.func_mut(*func).dfg_mut(),
                         instr_stack,
                         &symtable,
                     );
                     instr_stack.push(
                         program
-                            .func_mut(*func.unwrap())
+                            .func_mut(*func)
                             .dfg_mut()
                             .new_value()
                             .store(iv, v.clone()),
@@ -289,23 +287,13 @@ impl Expr {
 }
 
 // Converting an AST to Koopa IR using koopa::ir API.
-pub trait KoopaAST {
-    fn add_to_program(
-        &self,
-        program: &mut Program,
-        symtable: &mut SymTable,
-        func: Option<&Function>,
-        bb: Option<&BasicBlock>,
-        next_bb: Option<&BasicBlock>,
-    ) -> Result<BasicBlock, String>;
-}
 
 impl BlockItem {
     fn add_to_bb(
         &self,
         program: &mut Program,
         symtable: &mut SymTable,
-        func: Option<&Function>,
+        func: &Function,
         bb: &BasicBlock,
     ) -> Result<(), String> {
         let mut instr_stack: Vec<Value> = vec![];
@@ -320,13 +308,13 @@ impl BlockItem {
                 match v {
                     SymEntry::Var(v) => {
                         let exprv = expr.unroll(
-                            program.func_mut(*func.unwrap()).dfg_mut(),
+                            program.func_mut(*func).dfg_mut(),
                             &mut instr_stack,
                             &symtable,
                         );
                         instr_stack.push(
                             program
-                                .func_mut(*func.unwrap())
+                                .func_mut(*func)
                                 .dfg_mut()
                                 .new_value()
                                 .store(exprv, v.clone()),
@@ -338,14 +326,14 @@ impl BlockItem {
             BlockItem::Ret(expr) => {
                 // Create instructions with recursion.
                 let retv = expr.unroll(
-                    program.func_mut(*func.unwrap()).dfg_mut(),
+                    program.func_mut(*func).dfg_mut(),
                     &mut instr_stack,
                     &symtable,
                 );
                 // Return the final value.
                 instr_stack.push(
                     program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .dfg_mut()
                         .new_value()
                         .ret(Some(retv)),
@@ -360,7 +348,7 @@ impl BlockItem {
         }
         // Record all instructions.
         program
-            .func_mut(*func.unwrap())
+            .func_mut(*func)
             .layout_mut()
             .bb_mut(*bb)
             .insts_mut()
@@ -386,7 +374,7 @@ impl Block {
         &self,
         program: &mut Program,
         symtable: &mut SymTable,
-        func: Option<&Function>,
+        func: &Function,
         bb: &BasicBlock,
     ) -> Result<BasicBlock, String> {
         let mut bb = bb.clone();
@@ -402,22 +390,22 @@ impl Block {
 
                     // Create basic blocks for the if-else statement.
                     let then_bb = program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .dfg_mut()
                         .new_bb()
                         .basic_block(Some(format!("%if{}", if_cnt)));
                     let else_bb = program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .dfg_mut()
                         .new_bb()
                         .basic_block(Some(format!("%if{}else", if_cnt)));
                     let end_bb = program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .dfg_mut()
                         .new_bb()
                         .basic_block(Some(format!("%fi{}", if_cnt)));
                     program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .layout_mut()
                         .bbs_mut()
                         .extend([then_bb, else_bb, end_bb]);
@@ -425,19 +413,19 @@ impl Block {
                     // Create the branching instruction and complete the current basic block.
                     let mut instr_stack = vec![];
                     let condv = cond.unroll(
-                        program.func_mut(*func.unwrap()).dfg_mut(),
+                        program.func_mut(*func).dfg_mut(),
                         &mut instr_stack,
                         &symtable,
                     );
                     instr_stack.push(
                         program
-                            .func_mut(*func.unwrap())
+                            .func_mut(*func)
                             .dfg_mut()
                             .new_value()
                             .branch(condv, then_bb, else_bb),
                     );
                     program
-                        .func_mut(*func.unwrap())
+                        .func_mut(*func)
                         .layout_mut()
                         .bb_mut(bb)
                         .insts_mut()
@@ -449,14 +437,10 @@ impl Block {
                         items: vec![then_block.as_ref().clone()],
                     }
                     .add_to_bb(program, symtable, func, &then_bb)?;
-                    if !is_bb_returned(program, func.unwrap(), &then_ret_bb) {
-                        let jump_v = program
-                            .func_mut(*func.unwrap())
-                            .dfg_mut()
-                            .new_value()
-                            .jump(end_bb);
+                    if !is_bb_returned(program, func, &then_ret_bb) {
+                        let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
                         program
-                            .func_mut(*func.unwrap())
+                            .func_mut(*func)
                             .layout_mut()
                             .bb_mut(then_ret_bb)
                             .insts_mut()
@@ -477,14 +461,10 @@ impl Block {
                         }
                         .add_to_bb(program, symtable, func, &else_bb)?;
                     }
-                    if !is_bb_returned(program, func.unwrap(), &else_ret_bb) {
-                        let jump_v = program
-                            .func_mut(*func.unwrap())
-                            .dfg_mut()
-                            .new_value()
-                            .jump(end_bb);
+                    if !is_bb_returned(program, func, &else_ret_bb) {
+                        let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
                         program
-                            .func_mut(*func.unwrap())
+                            .func_mut(*func)
                             .layout_mut()
                             .bb_mut(else_ret_bb)
                             .insts_mut()
@@ -503,47 +483,38 @@ impl Block {
                     item.add_to_bb(program, symtable, func, &bb)?;
                 }
             }
-            if is_bb_returned(program, func.unwrap(), &bb) {
+            if is_bb_returned(program, func, &bb) {
                 break;
             }
         }
         Ok(bb)
     }
 }
-impl KoopaAST for FuncDef {
-    fn add_to_program(
-        &self,
-        program: &mut Program,
-        symtable: &mut SymTable,
-        _: Option<&Function>,
-        _: Option<&BasicBlock>,
-        _: Option<&BasicBlock>,
-    ) -> Result<BasicBlock, String> {
-        // TODO: Only the main function is supported.
-        let function = program.new_func(FunctionData::with_param_names(
-            format!("@{}", self.ident),
-            vec![],
-            match self.type_ {
-                FuncType::Int => Type::get_i32(),
-            },
-        ));
-        let func_data = program.func_mut(function);
-        let entry = func_data
-            .dfg_mut()
-            .new_bb()
-            .basic_block(Some("%entry".into()));
-        func_data.layout_mut().bbs_mut().extend([entry]);
-        self.block
-            .add_to_bb(program, symtable, Some(&function), &entry)?;
-        Ok(entry)
-    }
-}
 
 pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
+    // Initialize program and symbol table.
     let mut program: Program = Program::new();
     let mut symtable = SymTable::new();
-    comp_unit
-        .func_def
-        .add_to_program(&mut program, &mut symtable, None, None, None)?;
+
+    // TODO: Only the main function is supported.
+    let func = &comp_unit.func_def;
+    let function = program.new_func(FunctionData::with_param_names(
+        format!("@{}", func.ident),
+        vec![],
+        match func.type_ {
+            FuncType::Int => Type::get_i32(),
+        },
+    ));
+    let func_data = program.func_mut(function);
+    // Create the entry bb.
+    let entry = func_data
+        .dfg_mut()
+        .new_bb()
+        .basic_block(Some("%entry".into()));
+    func_data.layout_mut().bbs_mut().extend([entry]);
+    // A recursive conversion call. A block may have nested blocks.
+    func.block
+        .add_to_bb(&mut program, &mut symtable, &function, &entry)?;
+
     Ok(program)
 }
