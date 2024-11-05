@@ -1,28 +1,30 @@
-use koopa::ir::dfg::DataFlowGraph;
 use koopa::ir::BinaryOp;
 
 use crate::symtable::{SymEntry, SymTable};
 // AST definition
 #[derive(Debug)]
 pub struct CompUnit {
-    pub func_defs: Vec<FuncDef>,
+    pub defs: Vec<CompUnitDecl>,
 }
 #[derive(Debug)]
-pub struct FuncDef {
-    pub type_: FuncType,
-    pub ident: String,
-    pub params: Vec<FuncParam>,
-    pub block: Block,
+pub enum CompUnitDecl {
+    FuncDef {
+        type_: SysYType,
+        ident: String,
+        params: Vec<FuncParam>,
+        block: Block,
+    },
+    VarDecl(Vec<Symbol>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FuncParam {
-    pub type_: BType,
+    pub type_: SysYType,
     pub ident: String,
 }
 
-#[derive(Debug)]
-pub enum FuncType {
+#[derive(Debug, Clone)]
+pub enum SysYType {
     Int,
     Void,
 }
@@ -76,11 +78,6 @@ pub enum SymbolValue {
     Var(Option<Box<Expr>>), // init val
 }
 
-#[derive(Debug)]
-pub enum BType {
-    Int,
-}
-
 #[derive(Debug, Clone)]
 pub enum OpCode {
     // lv 1
@@ -127,13 +124,13 @@ impl From<&OpCode> for BinaryOp {
 }
 
 impl Expr {
-    pub fn reduce(&self, dfg: &DataFlowGraph, symtable: &SymTable) -> i32 {
+    pub fn reduce(&self, symtable: &SymTable) -> i32 {
         match self {
             Expr::Number(n) => *n,
             Expr::Unary(op, sub_expr) => match op {
-                OpCode::Sub => -sub_expr.reduce(dfg, symtable),
+                OpCode::Sub => -sub_expr.reduce(symtable),
                 OpCode::Not => {
-                    let v = sub_expr.reduce(dfg, symtable);
+                    let v = sub_expr.reduce(symtable);
                     if v == 0 {
                         1
                     } else {
@@ -143,8 +140,8 @@ impl Expr {
                 _ => panic!("Unsupported unary operator: {:?}", op),
             },
             Expr::Binary(lhs, op, rhs) => {
-                let l = lhs.reduce(dfg, symtable);
-                let r = rhs.reduce(dfg, symtable);
+                let l = lhs.reduce(symtable);
+                let r = rhs.reduce(symtable);
                 match op {
                     OpCode::Add => l + r,
                     OpCode::Sub => l - r,

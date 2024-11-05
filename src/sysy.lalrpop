@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, FuncDef, FuncType, Block, BlockItem, Expr, OpCode, BType, Symbol, SymbolValue, FuncParam};
+use crate::ast::{CompUnit, SysYType, Block, BlockItem, Expr, OpCode, Symbol, SymbolValue, FuncParam, CompUnitDecl};
 
 grammar;
 
@@ -19,16 +19,19 @@ List<T, S>: Vec<T> = {
     }
 };
 
-pub CompUnit: CompUnit = <func_defs:(<FuncDef>)*> => CompUnit {<>};
+pub CompUnit: CompUnit = <defs:(<CompUnitDecl>)*> => CompUnit {<>};
 
-pub FuncDef: FuncDef = <type_:FuncType> <ident:Ident> "(" <params:List<FuncParam, ",">> ")" <block:Block> => FuncDef{<>};
+pub CompUnitDecl: CompUnitDecl = {
+  <type_:SysYType> <ident:Ident> "(" <params:List<FuncParam, ",">> ")" <block:Block> => CompUnitDecl::FuncDef{<>},
+  VarDecl => CompUnitDecl::VarDecl(<>),
+};
 
-pub FuncType: FuncType = {
-    "int" => FuncType::Int,
-    "void" => FuncType::Void,
+pub SysYType: SysYType = {
+    "int" => SysYType::Int,
+    "void" => SysYType::Void,
 }
 
-pub FuncParam: FuncParam = <type_:BType> <ident:Ident> => FuncParam{<>};
+pub FuncParam: FuncParam = <type_:SysYType> <ident:Ident> => FuncParam{<>};
 
 pub Block: Block = "{" <items:(<BlockItem>)*> "}" => Block {<>};
 
@@ -46,10 +49,14 @@ CloseBlockItem: BlockItem = {
   "while" "(" <cond:Expr> ")" <while_block:CloseBlockItem> => BlockItem::While{cond: cond, while_block: Box::new(while_block)},
 }
 
+VarDecl: Vec<Symbol> = {
+  "const" <type_:SysYType> <v:List<ConstVarDef, ",">> ";" => v,
+  <type_:SysYType> <v:List<VariableDef, ",">> ";" => v,
+}
+
 NonIfBlockItem: BlockItem = {
   "return" <e:Expr?> ";" => BlockItem::Ret(e),
-  "const" <type_:BType> <v:List<ConstVarDef, ",">> ";" => BlockItem::Decl(v),
-  <type_:BType> <v:List<VariableDef, ",">> ";" => BlockItem::Decl(v),
+  VarDecl => BlockItem::Decl(<>),
   <v:LVal> "=" <e:Expr> ";" => BlockItem::Assign(v, e),
   Block => BlockItem::Block(<>),
   <e:Expr?> ";" => BlockItem::Expr(e),
@@ -70,10 +77,6 @@ VariableDef: Symbol = {
     value: SymbolValue::Var(Some(e)),
   },
   <k:Ident> => Symbol {name: k, value: SymbolValue::Var(None)},
-};
-
-BType: BType = {
-  "int" => BType::Int,
 };
 
 // Expression

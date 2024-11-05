@@ -1,8 +1,10 @@
-use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
+use koopa::ir::builder::{BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value, ValueKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ast::{BType, Block, BlockItem, CompUnit, Expr, FuncType, OpCode, Symbol, SymbolValue};
+use crate::ast::{
+    Block, BlockItem, CompUnit, CompUnitDecl, Expr, OpCode, Symbol, SymbolValue, SysYType,
+};
 use crate::symtable::{SymEntry, SymTable};
 
 fn is_bb_returned(program: &Program, func: &Function, bb: &BasicBlock) -> bool {
@@ -323,15 +325,11 @@ impl Symbol {
     ) {
         match &self.value {
             SymbolValue::Const(expr) => {
-                let dfg = program.func_mut(*func).dfg_mut();
                 // Constants in the SysY language must be determined during compilation.
                 // Just replace them with values recorded in the symbol table.
                 // No need to add additional IR instructions.
                 symtable
-                    .insert(
-                        self.name.clone(),
-                        SymEntry::Const(expr.reduce(dfg, &symtable)),
-                    )
+                    .insert(self.name.clone(), SymEntry::Const(expr.reduce(&symtable)))
                     .unwrap();
             }
             SymbolValue::Var(init) => {
@@ -741,77 +739,114 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
     }
 
     // Insert all functions to the symtable.
-    for func in comp_unit.func_defs.iter() {
-        let function = program.new_func(FunctionData::with_param_names(
-            format!("@{}", func.ident),
-            func.params
-                .iter()
-                .map(|p| {
-                    (
-                        Some(format!("@{}", p.ident)),
-                        match p.type_ {
-                            BType::Int => Type::get_i32(),
-                        },
-                    )
-                })
-                .collect(),
-            match func.type_ {
-                FuncType::Int => Type::get_i32(),
-                FuncType::Void => Type::get_unit(),
-            },
-        ));
-        // Insert the function into the symbol table.
-        symtable.insert(func.ident.clone(), SymEntry::Func(function))?;
+    for decl in comp_unit.defs.iter() {
+        match decl {
+            CompUnitDecl::FuncDef {
+                type_,
+                ident,
+                params,
+                block: _,
+            } => {
+                let function = program.new_func(FunctionData::with_param_names(
+                    format!("@{}", ident),
+                    params
+                        .iter()
+                        .map(|p| {
+                            (
+                                Some(format!("@{}", p.ident)),
+                                match p.type_ {
+                                    SysYType::Int => Type::get_i32(),
+                                    _ => {
+                                        panic!("unsupported type: {:?}", p.type_)
+                                    }
+                                },
+                            )
+                        })
+                        .collect(),
+                    match type_ {
+                        SysYType::Int => Type::get_i32(),
+                        SysYType::Void => Type::get_unit(),
+                    },
+                ));
+                // Insert the function into the symbol table.
+                symtable.insert(ident.clone(), SymEntry::Func(function))?;
+            }
+            CompUnitDecl::VarDecl(symbols) => {
+                for s in symbols {
+                    match &s.value {
+                        SymbolValue::Const(expr) => {
+                            // Constants in the SysY language must be determined during compilation.
+                            // Just replace them with values recorded in the symbol table.
+                            // No need to add additional IR instructions.
+                            symtable
+                                .insert(s.name.clone(), SymEntry::Const(expr.reduce(&symtable)))
+                                .unwrap();
+                        }
+                        SymbolValue::Var(init) => {
+                            let mut iv: i32 = 0;
+                            if let Some(init_value) = init {
+                                iv = init_value.reduce(&symtable);
+                            }
+                            let iv = program.new_value().integer(iv);
+                            let v = program.new_value().global_alloc(iv);
+                            program.set_value_name(v, Some(format!("@{}", &s.name)));
+                            symtable.insert(s.name.clone(), SymEntry::Var(v)).unwrap();
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    for func in comp_unit.func_defs.iter() {
-        let function = symtable.get(&func.ident)?;
-        if let SymEntry::Func(function) = function {
-            // Fork the symtable to insert function parameters in this scope.
-            symtable.fork();
+    for decl in comp_unit.defs.iter() {
+        match decl {
+            CompUnitDecl::FuncDef {
+                type_: _,
+                ident,
+                params,
+                block,
+            } => {
+                let function = symtable.get(ident)?;
+                if let SymEntry::Func(function) = function {
+                    // Fork the symtable to insert function parameters in this scope.
+                    symtable.fork();
 
-            // Function parameters.
-            for p in program.func(function).params() {
-                let key = program
-                    .func(function)
-                    .dfg()
-                    .value(p.clone())
-                    .name()
-                    .as_ref()
-                    .unwrap()[1..]
-                    .to_string();
-                symtable.insert(key, SymEntry::FuncParam(p.clone()))?;
+                    // Function parameters.
+                    for (pv, p) in program.func(function).params().iter().zip(params) {
+                        symtable.insert(p.ident.clone(), SymEntry::FuncParam(pv.clone()))?;
+                    }
+
+                    // Create the entry bb.
+                    let mut bb = program
+                        .func_mut(function)
+                        .dfg_mut()
+                        .new_bb()
+                        .basic_block(Some("%entry".into()));
+                    program
+                        .func_mut(function)
+                        .layout_mut()
+                        .bbs_mut()
+                        .extend([bb.clone()]);
+                    // A recursive conversion call. A block may have nested blocks.
+                    block.add_to_bb(&mut program, &mut symtable, &function, &mut bb, None, None)?;
+
+                    if !is_bb_returned(&program, &function, &bb) {
+                        let ret = program.func_mut(function).dfg_mut().new_value().ret(None);
+                        program
+                            .func_mut(function)
+                            .layout_mut()
+                            .bb_mut(bb)
+                            .insts_mut()
+                            .extend([ret]);
+                    }
+
+                    // Destroy the symtable.
+                    symtable.join()?;
+                } else {
+                    panic!("Function {} not found", ident);
+                }
             }
-
-            // Create the entry bb.
-            let mut bb = program
-                .func_mut(function)
-                .dfg_mut()
-                .new_bb()
-                .basic_block(Some("%entry".into()));
-            program
-                .func_mut(function)
-                .layout_mut()
-                .bbs_mut()
-                .extend([bb.clone()]);
-            // A recursive conversion call. A block may have nested blocks.
-            func.block
-                .add_to_bb(&mut program, &mut symtable, &function, &mut bb, None, None)?;
-
-            if !is_bb_returned(&program, &function, &bb) {
-                let ret = program.func_mut(function).dfg_mut().new_value().ret(None);
-                program
-                    .func_mut(function)
-                    .layout_mut()
-                    .bb_mut(bb)
-                    .insts_mut()
-                    .extend([ret]);
-            }
-
-            // Destroy the symtable.
-            symtable.join()?;
-        } else {
-            panic!("Function {} not found", func.ident);
+            _ => {}
         }
     }
 
