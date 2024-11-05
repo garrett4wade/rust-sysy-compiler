@@ -1,0 +1,53 @@
+fun @main(): i32 {
+%entry:
+  @a = alloc i32
+  store 1, @a
+  @b = alloc i32
+  store 2, @b
+  jump %while0entry
+
+%while0entry:
+  %0 = load @a
+  %1 = lt %0, 10
+  br %1, %while0body, %while0fi
+
+%while0body:
+  %2 = load @a
+  %3 = add %2, 1
+  store %3, @a
+  jump %while1entry
+
+%while0fi:
+  %4 = load @a
+  %5 = load @b
+  %6 = add %4, %5
+  ret %6
+
+%while1entry:
+  @__logicAnd0Res = alloc i32
+  store 0, @__logicAnd0Res
+  %7 = load @a
+  %8 = lt %7, 5
+  %9 = ne %8, 0
+  br %9, %__logicAnd0, %__logicAnd0fi
+
+%while1body:
+  %10 = load @b
+  %11 = add %10, 1
+  store %11, @b
+  jump %while1entry
+
+%while1fi:
+  jump %while0entry
+
+%__logicAnd0:
+  %12 = load @b
+  %13 = lt %12, 10
+  %14 = ne %13, 0
+  store %14, @__logicAnd0Res
+  jump %__logicAnd0fi
+
+%__logicAnd0fi:
+  %15 = load @__logicAnd0Res
+  br %15, %while1body, %while1fi
+}

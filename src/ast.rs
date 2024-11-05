@@ -36,6 +36,12 @@ pub enum BlockItem {
         then_block: Box<BlockItem>,
         else_block: Option<Box<BlockItem>>,
     },
+    While {
+        cond: Box<Expr>,
+        while_block: Box<BlockItem>,
+    },
+    Break,
+    Continue,
 }
 
 #[derive(Debug, Clone)]

@@ -34,11 +34,13 @@ BlockItem: BlockItem = {OpenBlockItem, CloseBlockItem};
 OpenBlockItem: BlockItem = {
   "if" "(" <cond:Expr> ")" <then_block:BlockItem> => BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: None},
   "if" "(" <cond:Expr> ")" <then_block:CloseBlockItem> "else" <else_block:OpenBlockItem> =>  BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: Some(Box::new(else_block))},
+  "while" "(" <cond:Expr> ")" <while_block:OpenBlockItem> => BlockItem::While{cond: cond, while_block: Box::new(while_block)},
 }
 
 CloseBlockItem: BlockItem = {
   NonIfBlockItem,
   "if" "(" <cond:Expr> ")" <then_block:CloseBlockItem> "else" <else_block:CloseBlockItem> =>  BlockItem::If{cond: cond, then_block: Box::new(then_block), else_block: Some(Box::new(else_block))},
+  "while" "(" <cond:Expr> ")" <while_block:CloseBlockItem> => BlockItem::While{cond: cond, while_block: Box::new(while_block)},
 }
 
 NonIfBlockItem: BlockItem = {
@@ -48,6 +50,8 @@ NonIfBlockItem: BlockItem = {
   <v:LVal> "=" <e:Expr> ";" => BlockItem::Assign(v, e),
   Block => BlockItem::Block(<>),
   <e:Expr?> ";" => BlockItem::Expr(e),
+  "break" ";" => BlockItem::Break,
+  "continue" ";" => BlockItem::Continue,
 };
 
 ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {

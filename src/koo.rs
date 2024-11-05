@@ -18,6 +18,50 @@ fn is_bb_returned(program: &Program, func: &Function, bb: &BasicBlock) -> bool {
         .unwrap_or(false)
 }
 
+fn shrink_instrs(program: &mut Program, func: &Function, bb: &BasicBlock) {
+    let mut shrinked = program
+        .func(*func)
+        .layout()
+        .bbs()
+        .node(bb)
+        .expect("Basic block does not exist.")
+        .insts()
+        .keys()
+        .take_while(|&&v| {
+            !matches!(
+                program.func(*func).dfg().value(v.clone()).kind(),
+                ValueKind::Return(_) | ValueKind::Jump(_) | ValueKind::Branch(..)
+            )
+        })
+        .copied()
+        .collect::<Vec<Value>>();
+    if let Some(&ins) = program
+        .func(*func)
+        .layout()
+        .bbs()
+        .node(bb)
+        .expect("Basic block does not exist.")
+        .insts()
+        .keys()
+        .skip(shrinked.len())
+        .next()
+    {
+        shrinked.push(ins);
+    }
+    program
+        .func_mut(*func)
+        .layout_mut()
+        .bb_mut(bb.clone())
+        .insts_mut()
+        .clear();
+    program
+        .func_mut(*func)
+        .layout_mut()
+        .bb_mut(bb.clone())
+        .insts_mut()
+        .extend(shrinked);
+}
+
 fn shortpath_eval(
     program: &mut Program,
     func: &Function,
@@ -335,7 +379,11 @@ impl BlockItem {
             BlockItem::Expr(_) => {
                 // Do nothing.
             }
-            BlockItem::If { .. } | BlockItem::Block(..) => {
+            BlockItem::If { .. }
+            | BlockItem::Block(..)
+            | BlockItem::While { .. }
+            | BlockItem::Break
+            | BlockItem::Continue => {
                 panic!("Should not called in BlockItem::add_to_bb")
             }
         }
@@ -357,6 +405,8 @@ impl Block {
         symtable: &mut SymTable,
         func: &Function,
         bb: &mut BasicBlock,
+        break_dst: Option<&BasicBlock>,
+        conti_dst: Option<&BasicBlock>,
     ) -> Result<(), String> {
         for item in self.items.iter() {
             match item {
@@ -412,16 +462,22 @@ impl Block {
                     Block {
                         items: vec![then_block.as_ref().clone()],
                     }
-                    .add_to_bb(program, symtable, func, &mut then_bb)?;
-                    if !is_bb_returned(program, func, &then_bb) {
-                        let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
-                        program
-                            .func_mut(*func)
-                            .layout_mut()
-                            .bb_mut(then_bb.clone())
-                            .insts_mut()
-                            .extend([jump_v]);
-                    }
+                    .add_to_bb(
+                        program,
+                        symtable,
+                        func,
+                        &mut then_bb,
+                        break_dst,
+                        conti_dst,
+                    )?;
+                    let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(then_bb.clone())
+                        .insts_mut()
+                        .extend([jump_v]);
+                    shrink_instrs(program, func, &then_bb);
 
                     // Handle the "else" block.
                     // If there's no "else", create an empty block for the jump instruction.
@@ -434,6 +490,8 @@ impl Block {
                             symtable,
                             func,
                             &mut else_bb,
+                            break_dst,
+                            conti_dst,
                         )?;
                     } else {
                         Block {
@@ -444,24 +502,140 @@ impl Block {
                             symtable,
                             func,
                             &mut else_bb,
+                            break_dst,
+                            conti_dst,
                         )?;
                     }
-                    if !is_bb_returned(program, func, &else_bb) {
-                        let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
-                        program
-                            .func_mut(*func)
-                            .layout_mut()
-                            .bb_mut(else_bb.clone())
-                            .insts_mut()
-                            .extend([jump_v]);
-                    }
+                    let jump_v = program.func_mut(*func).dfg_mut().new_value().jump(end_bb);
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(else_bb.clone())
+                        .insts_mut()
+                        .extend([jump_v]);
+                    shrink_instrs(program, func, &else_bb);
 
                     // Finally, change the current basic block to "end_bb".
                     *bb = end_bb;
                 }
+                BlockItem::While { cond, while_block } => {
+                    static WHILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+                    let while_cnt = WHILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+                    // Create basic blocks for the while statement.
+                    let mut cond_bb = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_bb()
+                        .basic_block(Some(format!("%while{}entry", while_cnt)));
+                    let entry_bb = cond_bb.clone();
+                    let mut body_bb = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_bb()
+                        .basic_block(Some(format!("%while{}body", while_cnt)));
+                    let end_bb = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_bb()
+                        .basic_block(Some(format!("%while{}fi", while_cnt)));
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bbs_mut()
+                        .extend([cond_bb, body_bb, end_bb]);
+
+                    // Create the jump instruction and complete the current basic block.
+                    let jp = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_value()
+                        .jump(cond_bb.clone());
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(bb.clone())
+                        .insts_mut()
+                        .extend([jp]);
+
+                    // Handle the "cond" block.
+                    let condv = cond.unroll(program, func, symtable, &mut cond_bb);
+                    let branchv = program.func_mut(*func).dfg_mut().new_value().branch(
+                        condv,
+                        body_bb.clone(),
+                        end_bb.clone(),
+                    );
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(cond_bb.clone())
+                        .insts_mut()
+                        .extend([branchv]);
+
+                    // Handle the "body" block.
+                    // Wrap it as a block and call Block::add_to_bb recursively.
+                    Block {
+                        items: vec![while_block.as_ref().clone()],
+                    }
+                    .add_to_bb(
+                        program,
+                        symtable,
+                        func,
+                        &mut body_bb,
+                        Some(&end_bb),
+                        Some(&entry_bb),
+                    )?;
+                    let jump_v = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_value()
+                        .jump(entry_bb.clone());
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(body_bb.clone())
+                        .insts_mut()
+                        .extend([jump_v]);
+                    shrink_instrs(program, func, &body_bb);
+
+                    // Finally, change the current basic block to "end_bb".
+                    *bb = end_bb;
+                }
+                BlockItem::Break => {
+                    if break_dst.is_none() {
+                        panic!("Break statement not in a while loop");
+                    }
+                    let jump_v = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_value()
+                        .jump(break_dst.unwrap().clone());
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(bb.clone())
+                        .insts_mut()
+                        .extend([jump_v]);
+                }
+                BlockItem::Continue => {
+                    if conti_dst.is_none() {
+                        panic!("Continue statement not in a while loop");
+                    }
+                    let jump_v = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_value()
+                        .jump(conti_dst.unwrap().clone());
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(bb.clone())
+                        .insts_mut()
+                        .extend([jump_v]);
+                }
                 BlockItem::Block(block) => {
                     symtable.fork();
-                    block.add_to_bb(program, symtable, func, bb)?;
+                    block.add_to_bb(program, symtable, func, bb, break_dst, conti_dst)?;
                     symtable.join()?;
                 }
                 _ => {
@@ -498,8 +672,14 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
         .basic_block(Some("%entry".into()));
     func_data.layout_mut().bbs_mut().extend([entry.clone()]);
     // A recursive conversion call. A block may have nested blocks.
-    func.block
-        .add_to_bb(&mut program, &mut symtable, &function, &mut entry)?;
+    func.block.add_to_bb(
+        &mut program,
+        &mut symtable,
+        &function,
+        &mut entry,
+        None,
+        None,
+    )?;
 
     Ok(program)
 }
