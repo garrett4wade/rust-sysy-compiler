@@ -1,4 +1,4 @@
-use koopa::ir::Value;
+use koopa::ir::{Function, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::iter;
@@ -8,6 +8,8 @@ use std::rc::Rc;
 pub enum SymEntry {
     Const(i32),
     Var(Value),
+    Func(Function),
+    FuncParam(Value),
 }
 pub struct SymTable {
     parent: Vec<Rc<RefCell<HashMap<String, SymEntry>>>>,
@@ -50,5 +52,12 @@ impl SymTable {
         }
         self.table.borrow_mut().insert(k, v);
         Ok(())
+    }
+
+    pub fn replace(&mut self, k: String, v: SymEntry) -> Result<SymEntry, String> {
+        if !self.table.borrow().contains_key(&k) {
+            return Err(format!("Symbol {} has not been defined", k));
+        }
+        Ok(self.table.borrow_mut().insert(k, v).unwrap())
     }
 }

@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, FuncDef, FuncType, Block, BlockItem, Expr, OpCode, BType, Symbol, SymbolValue};
+use crate::ast::{CompUnit, FuncDef, FuncType, Block, BlockItem, Expr, OpCode, BType, Symbol, SymbolValue, FuncParam};
 
 grammar;
 
@@ -19,13 +19,16 @@ List<T, S>: Vec<T> = {
     }
 };
 
-pub CompUnit: CompUnit = <func_def:FuncDef> => CompUnit {<>};
+pub CompUnit: CompUnit = <func_defs:(<FuncDef>)*> => CompUnit {<>};
 
-pub FuncDef: FuncDef = <type_:FuncType> <ident:Ident> "(" ")" <block:Block> => FuncDef{<>};
+pub FuncDef: FuncDef = <type_:FuncType> <ident:Ident> "(" <params:List<FuncParam, ",">> ")" <block:Block> => FuncDef{<>};
 
 pub FuncType: FuncType = {
     "int" => FuncType::Int,
+    "void" => FuncType::Void,
 }
+
+pub FuncParam: FuncParam = <type_:BType> <ident:Ident> => FuncParam{<>};
 
 pub Block: Block = "{" <items:(<BlockItem>)*> "}" => Block {<>};
 
@@ -44,7 +47,7 @@ CloseBlockItem: BlockItem = {
 }
 
 NonIfBlockItem: BlockItem = {
-  "return" <e:Expr> ";" => BlockItem::Ret(e),
+  "return" <e:Expr?> ";" => BlockItem::Ret(e),
   "const" <type_:BType> <v:List<ConstVarDef, ",">> ";" => BlockItem::Decl(v),
   <type_:BType> <v:List<VariableDef, ",">> ";" => BlockItem::Decl(v),
   <v:LVal> "=" <e:Expr> ";" => BlockItem::Assign(v, e),
@@ -94,6 +97,7 @@ UnaryExpr: Box<Expr> = {
 Term: Box<Expr> = {
   Number => Box::new(Expr::Number(<>)),
   LVal => Box::new(Expr::Symbol(<>)),
+  <funcname:Ident> "(" <args:List<Expr, ",">> ")" => Box::new(Expr::FuncCall{<>}),
   "(" <Expr> ")",
 }
 

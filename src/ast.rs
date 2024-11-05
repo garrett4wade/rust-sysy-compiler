@@ -5,18 +5,26 @@ use crate::symtable::{SymEntry, SymTable};
 // AST definition
 #[derive(Debug)]
 pub struct CompUnit {
-    pub func_def: FuncDef,
+    pub func_defs: Vec<FuncDef>,
 }
 #[derive(Debug)]
 pub struct FuncDef {
     pub type_: FuncType,
     pub ident: String,
+    pub params: Vec<FuncParam>,
     pub block: Block,
+}
+
+#[derive(Debug)]
+pub struct FuncParam {
+    pub type_: BType,
+    pub ident: String,
 }
 
 #[derive(Debug)]
 pub enum FuncType {
     Int,
+    Void,
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +36,7 @@ pub struct Block {
 pub enum BlockItem {
     Decl(Vec<Symbol>),
     Assign(String, Box<Expr>),
-    Ret(Box<Expr>),
+    Ret(Option<Box<Expr>>),
     Block(Block),
     Expr(Option<Box<Expr>>),
     If {
@@ -50,6 +58,10 @@ pub enum Expr {
     Unary(OpCode, Box<Expr>),
     Symbol(String),
     Number(i32),
+    FuncCall {
+        funcname: String,
+        args: Vec<Box<Expr>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +172,7 @@ impl Expr {
                     ),
                 }
             }
+            Expr::FuncCall { .. } => panic!("Cannot reduce a function."),
         }
     }
 }

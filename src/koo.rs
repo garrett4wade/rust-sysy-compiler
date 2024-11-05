@@ -2,7 +2,7 @@ use koopa::ir::builder::{BasicBlockBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value, ValueKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::ast::{Block, BlockItem, CompUnit, Expr, FuncType, OpCode, Symbol, SymbolValue};
+use crate::ast::{BType, Block, BlockItem, CompUnit, Expr, FuncType, OpCode, Symbol, SymbolValue};
 use crate::symtable::{SymEntry, SymTable};
 
 fn is_bb_returned(program: &Program, func: &Function, bb: &BasicBlock) -> bool {
@@ -264,6 +264,49 @@ impl Expr {
                             .extend([v]);
                         v
                     }
+                    SymEntry::FuncParam(v) => {
+                        let ty = dfg.value(v).ty().clone();
+                        let alloc = dfg.new_value().alloc(ty);
+                        dfg.set_value_name(alloc.clone(), Some(format!("%{}", name)));
+                        let store = dfg.new_value().store(v.clone(), alloc.clone());
+                        let load = dfg.new_value().load(alloc.clone());
+                        program
+                            .func_mut(*func)
+                            .layout_mut()
+                            .bb_mut(bb.clone())
+                            .insts_mut()
+                            .extend([alloc, store, load]);
+                        // Replace the original symbol with the new one.
+                        symtable
+                            .replace(name.clone(), SymEntry::Var(alloc))
+                            .unwrap();
+                        load
+                    }
+                    SymEntry::Func(..) => {
+                        panic!("Function call in expression but expressed as Expr::Symbol.")
+                    }
+                }
+            }
+            Expr::FuncCall { funcname, args } => {
+                if let SymEntry::Func(callee) = symtable.get(funcname).unwrap() {
+                    let args = args
+                        .iter()
+                        .map(|e| e.unroll(program, func, symtable, bb))
+                        .collect::<Vec<Value>>();
+                    let v = program
+                        .func_mut(*func)
+                        .dfg_mut()
+                        .new_value()
+                        .call(callee, args);
+                    program
+                        .func_mut(*func)
+                        .layout_mut()
+                        .bb_mut(bb.clone())
+                        .insts_mut()
+                        .extend([v]);
+                    v
+                } else {
+                    panic!("Function {} not found", funcname);
                 }
             }
         }
@@ -349,10 +392,10 @@ impl BlockItem {
                 }
             }
             BlockItem::Assign(name, expr) => {
+                let exprv = expr.unroll(program, func, symtable, bb);
                 let v = symtable.get(name).unwrap();
                 match v {
                     SymEntry::Var(v) => {
-                        let exprv = expr.unroll(program, func, symtable, bb);
                         instrs.push(
                             program
                                 .func_mut(*func)
@@ -361,23 +404,25 @@ impl BlockItem {
                                 .store(exprv, v.clone()),
                         );
                     }
-                    _ => panic!("Cannot assign to a constant: {}", name),
+                    SymEntry::Func(_) => {
+                        panic!("Cannot assign to a function: {}", name)
+                    }
+                    SymEntry::FuncParam(_) => {
+                        panic!("Cannot assign to a function parameter: {}", name)
+                    }
+                    SymEntry::Const(_) => panic!("Cannot assign to a constant: {}", name),
                 }
             }
             BlockItem::Ret(expr) => {
                 // Create instructions with recursion.
-                let retv = expr.unroll(program, func, symtable, bb);
+                let retv = expr.clone().map(|e| e.unroll(program, func, symtable, bb));
                 // Return the final value.
-                instrs.push(
-                    program
-                        .func_mut(*func)
-                        .dfg_mut()
-                        .new_value()
-                        .ret(Some(retv)),
-                );
+                instrs.push(program.func_mut(*func).dfg_mut().new_value().ret(retv));
             }
-            BlockItem::Expr(_) => {
-                // Do nothing.
+            BlockItem::Expr(e) => {
+                if let Some(e) = e {
+                    e.unroll(program, func, symtable, bb);
+                }
             }
             BlockItem::If { .. }
             | BlockItem::Block(..)
@@ -655,31 +700,120 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
     let mut program: Program = Program::new();
     let mut symtable = SymTable::new();
 
-    // TODO: Only the main function is supported.
-    let func = &comp_unit.func_def;
-    let function = program.new_func(FunctionData::with_param_names(
-        format!("@{}", func.ident),
+    // Declare library functions.
+    let libfunc_names = [
+        "getint",
+        "getch",
+        "getarray",
+        "putint",
+        "putch",
+        "putarray",
+        "starttime",
+        "stoptime",
+    ];
+    let libfunc_ptys: [Vec<Type>; 8] = [
         vec![],
-        match func.type_ {
-            FuncType::Int => Type::get_i32(),
-        },
-    ));
-    let func_data = program.func_mut(function);
-    // Create the entry bb.
-    let mut entry = func_data
-        .dfg_mut()
-        .new_bb()
-        .basic_block(Some("%entry".into()));
-    func_data.layout_mut().bbs_mut().extend([entry.clone()]);
-    // A recursive conversion call. A block may have nested blocks.
-    func.block.add_to_bb(
-        &mut program,
-        &mut symtable,
-        &function,
-        &mut entry,
-        None,
-        None,
-    )?;
+        vec![],
+        vec![Type::get_pointer(Type::get_i32())],
+        vec![Type::get_i32()],
+        vec![Type::get_i32()],
+        vec![Type::get_i32(), Type::get_pointer(Type::get_i32())],
+        vec![],
+        vec![],
+    ];
+    let libfunc_rettys: [Type; 8] = [
+        Type::get_i32(),
+        Type::get_i32(),
+        Type::get_i32(),
+        Type::get_unit(),
+        Type::get_unit(),
+        Type::get_unit(),
+        Type::get_unit(),
+        Type::get_unit(),
+    ];
+    for ((&name, params_ty), ret_ty) in libfunc_names
+        .iter()
+        .zip(libfunc_ptys.iter())
+        .zip(libfunc_rettys.iter())
+    {
+        let data = FunctionData::new_decl(format!("@{}", name), params_ty.clone(), ret_ty.clone());
+        symtable.insert(name.to_string(), SymEntry::Func(program.new_func(data)))?;
+    }
+
+    // Insert all functions to the symtable.
+    for func in comp_unit.func_defs.iter() {
+        let function = program.new_func(FunctionData::with_param_names(
+            format!("@{}", func.ident),
+            func.params
+                .iter()
+                .map(|p| {
+                    (
+                        Some(format!("@{}", p.ident)),
+                        match p.type_ {
+                            BType::Int => Type::get_i32(),
+                        },
+                    )
+                })
+                .collect(),
+            match func.type_ {
+                FuncType::Int => Type::get_i32(),
+                FuncType::Void => Type::get_unit(),
+            },
+        ));
+        // Insert the function into the symbol table.
+        symtable.insert(func.ident.clone(), SymEntry::Func(function))?;
+    }
+
+    for func in comp_unit.func_defs.iter() {
+        let function = symtable.get(&func.ident)?;
+        if let SymEntry::Func(function) = function {
+            // Fork the symtable to insert function parameters in this scope.
+            symtable.fork();
+
+            // Function parameters.
+            for p in program.func(function).params() {
+                let key = program
+                    .func(function)
+                    .dfg()
+                    .value(p.clone())
+                    .name()
+                    .as_ref()
+                    .unwrap()[1..]
+                    .to_string();
+                symtable.insert(key, SymEntry::FuncParam(p.clone()))?;
+            }
+
+            // Create the entry bb.
+            let mut bb = program
+                .func_mut(function)
+                .dfg_mut()
+                .new_bb()
+                .basic_block(Some("%entry".into()));
+            program
+                .func_mut(function)
+                .layout_mut()
+                .bbs_mut()
+                .extend([bb.clone()]);
+            // A recursive conversion call. A block may have nested blocks.
+            func.block
+                .add_to_bb(&mut program, &mut symtable, &function, &mut bb, None, None)?;
+
+            if !is_bb_returned(&program, &function, &bb) {
+                let ret = program.func_mut(function).dfg_mut().new_value().ret(None);
+                program
+                    .func_mut(function)
+                    .layout_mut()
+                    .bb_mut(bb)
+                    .insts_mut()
+                    .extend([ret]);
+            }
+
+            // Destroy the symtable.
+            symtable.join()?;
+        } else {
+            panic!("Function {} not found", func.ident);
+        }
+    }
 
     Ok(program)
 }
