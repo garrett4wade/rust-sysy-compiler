@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, SysYType, Block, BlockItem, Expr, OpCode, Symbol, SymbolValue, FuncParam, CompUnitDecl, LVal};
+use crate::ast::{CompUnit, SysYType, Block, BlockItem, Expr, OpCode, Symbol, SymbolValue, FuncParam, CompUnitDecl, LVal, InitListElem};
 
 grammar;
 
@@ -66,7 +66,13 @@ NonIfBlockItem: BlockItem = {
 
 ConstVarDef: Symbol = {
   <k:Ident> "=" <e:Expr> => Symbol {name: k, value: SymbolValue::Const(e)},
-  <k:Ident> "[" <l:Expr> "]" "=" "{" <init:List<Expr, ",">> "}" => Symbol {name: k, value: SymbolValue::ConstArr {len: l, init: init}},
+  <k:Ident> <lens:(<ArrayDim>)+> "=" "{" <init:List<InitListElem, ",">> "}" => Symbol {name: k, value: SymbolValue::ConstArr {lens: lens, init: InitListElem::List(init)}},
+}
+
+ArrayDim: Box<Expr> = "[" <e:Expr> "]" => e;
+InitListElem: InitListElem = {
+  "{" <x:List<InitListElem, ",">> "}" => InitListElem::List(x),
+  <e:Expr> => InitListElem::Item(e),
 }
 
 VariableDef: Symbol = {
@@ -75,8 +81,8 @@ VariableDef: Symbol = {
     value: SymbolValue::Var(Some(e)),
   },
   <k:Ident> => Symbol {name: k, value: SymbolValue::Var(None)},
-  <k:Ident> "[" <l:Expr> "]" => Symbol {name: k, value: SymbolValue::Arr {len: l, init: None}},
-  <k:Ident> "[" <l:Expr> "]" "=" "{" <init:List<Expr, ",">> "}" => Symbol {name: k, value: SymbolValue::Arr {len: l, init: Some(init)}},
+  <k:Ident> <lens:(<ArrayDim>)+> => Symbol {name: k, value: SymbolValue::Arr {lens: lens, init: None}},
+  <k:Ident> <lens:(<ArrayDim>)+> "=" "{" <init:List<InitListElem, ",">> "}" => Symbol {name: k, value: SymbolValue::Arr {lens: lens, init: Some(InitListElem::List(init))}},
 };
 
 // Expression
@@ -144,7 +150,7 @@ UnaryOpCode: OpCode = {
 
 LVal: LVal = {
   Ident => LVal::Ident(<>),
-  <k:Ident> "[" <idx:Expr> "]" => LVal::ArrayElem(k, idx),
+  <k:Ident> <lens:(<ArrayDim>)+> => LVal::ArrayElem(k, lens),
 }
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();

@@ -37,7 +37,7 @@ pub struct Block {
 #[derive(Debug, Clone)]
 pub enum LVal {
     Ident(String),
-    ArrayElem(String, Box<Expr>),
+    ArrayElem(String, Vec<Box<Expr>>),
 }
 
 #[derive(Debug, Clone)]
@@ -83,13 +83,19 @@ pub enum SymbolValue {
     Const(Box<Expr>),
     Var(Option<Box<Expr>>), // init val
     ConstArr {
-        len: Box<Expr>,
-        init: Vec<Box<Expr>>,
+        lens: Vec<Box<Expr>>,
+        init: InitListElem,
     },
     Arr {
-        len: Box<Expr>,
-        init: Option<Vec<Box<Expr>>>,
+        lens: Vec<Box<Expr>>,
+        init: Option<InitListElem>,
     },
+}
+
+#[derive(Debug, Clone)]
+pub enum InitListElem {
+    Item(Box<Expr>),
+    List(Vec<InitListElem>),
 }
 
 #[derive(Debug, Clone)]

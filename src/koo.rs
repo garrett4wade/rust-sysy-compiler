@@ -1,10 +1,11 @@
 use koopa::ir::builder::{BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value, ValueKind};
-use std::iter::repeat;
+use num::PrimInt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{
-    Block, BlockItem, CompUnit, CompUnitDecl, Expr, LVal, OpCode, Symbol, SymbolValue, SysYType,
+    Block, BlockItem, CompUnit, CompUnitDecl, Expr, InitListElem, LVal, OpCode, Symbol,
+    SymbolValue, SysYType,
 };
 use crate::symtable::{SymEntry, SymTable};
 
@@ -191,31 +192,130 @@ fn shortpath_eval(
     }
 }
 
+fn pack_initilizer_list(init: &[InitListElem], binsize: usize) -> Vec<InitListElem> {
+    let mut i = 0;
+    let mut res = vec![];
+    while i < init.len() {
+        match &init[i] {
+            InitListElem::List(_) => {
+                res.push(init[i].clone());
+                i += 1;
+            }
+            InitListElem::Item(_) => {
+                let mut j = i;
+                while j - i < binsize && j < init.len() && matches!(init[j], InitListElem::Item(_))
+                {
+                    j += 1;
+                }
+                if (j - i) % binsize != 0 {
+                    panic!("Invalid initilizer list");
+                }
+                let mut items = vec![];
+                for k in i..j {
+                    if let InitListElem::Item(item) = &init[k] {
+                        items.push(InitListElem::Item(item.clone()));
+                    } else {
+                        unreachable!()
+                    }
+                }
+                res.push(InitListElem::List(items));
+                i = j;
+            }
+        }
+    }
+    res
+}
+fn resolve_initializer_list(
+    symtable: &SymTable,
+    dims: &[usize],
+    init: &Vec<InitListElem>,
+    res: &mut [i32],
+) {
+    let head_item_cnt = init
+        .iter()
+        .take_while(|&x| matches!(x, InitListElem::Item(..)))
+        .count();
+    // Fill the first several numbers.
+    init.iter()
+        .take_while(|e| matches!(e, InitListElem::Item(_)))
+        .enumerate()
+        .for_each(|(i, e)| {
+            res[i] = if let InitListElem::Item(e) = e {
+                e.reduce(symtable)
+            } else {
+                unreachable!()
+            };
+        });
+    if head_item_cnt == init.len() {
+        return;
+    }
+
+    // dims [2, 3, 4] => accum_dims [4, 12, 24]
+    let accum_dims: Vec<usize> = dims
+        .iter()
+        .rev()
+        .scan(1, |s, &x| {
+            *s *= x;
+            Some(*s)
+        })
+        .collect();
+    // accum_dims [24, 12, 4]
+    let accum_dims: Vec<usize> = accum_dims.into_iter().rev().collect();
+    let recur_axis: usize;
+    if head_item_cnt == 0 {
+        recur_axis = 1;
+    } else {
+        recur_axis = accum_dims
+            .iter()
+            .take_while(|&d| head_item_cnt % d != 0)
+            .count();
+    }
+
+    if recur_axis == dims.len() {
+        panic!("Invalid initializer list");
+    }
+
+    let init = pack_initilizer_list(&init[head_item_cnt..], accum_dims[recur_axis]);
+    for (i, list_init) in init.iter().enumerate() {
+        let recur_step = accum_dims[recur_axis];
+        if let InitListElem::List(elems) = list_init {
+            let s = head_item_cnt + i * recur_step;
+            let e = s + recur_step;
+            resolve_initializer_list(symtable, &dims[recur_axis..], elems, &mut res[s..e]);
+        } else {
+            unreachable!()
+        }
+    }
+}
 fn get_arr_elem(
     program: &mut Program,
     func: &Function,
     symtable: &mut SymTable,
     bb: &mut BasicBlock,
     array_name: &String,
-    idx: i32,
+    indices: &Vec<Value>,
+    ndim: usize,
 ) -> Value {
     let array = symtable
         .get(array_name)
         .expect(format!("Array {} not found", array_name).as_str());
+    assert!(indices.len() <= ndim as usize);
     match array {
         SymEntry::Array(array) | SymEntry::ConstArray(array) => {
-            let idx = program.func_mut(*func).dfg_mut().new_value().integer(idx);
-            let ptr = program
-                .func_mut(*func)
-                .dfg_mut()
-                .new_value()
-                .get_elem_ptr(array, idx);
-            program
-                .func_mut(*func)
-                .layout_mut()
-                .bb_mut(bb.clone())
-                .insts_mut()
-                .extend([ptr]);
+            let mut ptr = array;
+            for &idx in indices.iter() {
+                ptr = program
+                    .func_mut(*func)
+                    .dfg_mut()
+                    .new_value()
+                    .get_elem_ptr(ptr, idx);
+                program
+                    .func_mut(*func)
+                    .layout_mut()
+                    .bb_mut(bb.clone())
+                    .insts_mut()
+                    .extend([ptr]);
+            }
             ptr
         }
         _ => panic!("{} is not an array or a const array", array_name),
@@ -228,7 +328,8 @@ fn put_arr_elem(
     symtable: &mut SymTable,
     bb: &mut BasicBlock,
     array_name: &String,
-    idx: i32,
+    indices: &Vec<Value>,
+    ndim: usize,
     value: Value,
 ) {
     let array = symtable
@@ -238,7 +339,10 @@ fn put_arr_elem(
         SymEntry::ConstArray(_) => panic!("Cannot modify a const array"),
         _ => {}
     }
-    let ptr = get_arr_elem(program, func, symtable, bb, array_name, idx);
+    if indices.len() != ndim as usize {
+        panic!("Can only put a scalar to an array.")
+    }
+    let ptr = get_arr_elem(program, func, symtable, bb, array_name, indices, ndim);
     let store = program
         .func_mut(*func)
         .dfg_mut()
@@ -251,20 +355,38 @@ fn put_arr_elem(
         .insts_mut()
         .extend([store]);
 }
+fn modulo_idx<T: PrimInt>(idx: T, dims: &Vec<T>) -> Vec<T> {
+    let mut idx = idx;
+    let mut res = vec![];
+    for &dim in dims.iter().rev() {
+        res.push(idx % dim);
+        idx = idx / dim;
+    }
+    res.reverse();
+    res
+}
+
+fn get_arr_type(lens: &Vec<usize>) -> Type {
+    let mut ty = Type::get_array(Type::get_i32(), lens[lens.len() - 1]);
+    for &len in lens.iter().rev().skip(1) {
+        ty = Type::get_array(ty, len);
+    }
+    ty
+}
 fn init_local_array(
     program: &mut Program,
     func: &Function,
     symtable: &mut SymTable,
     bb: &mut BasicBlock,
     array_name: &String,
-    len: usize,
-    init_values: Vec<i32>,
+    lens: &Vec<usize>,
+    init_values: &Option<Vec<i32>>,
 ) {
     let alloc = program
         .func_mut(*func)
         .dfg_mut()
         .new_value()
-        .alloc(Type::get_array(Type::get_i32(), len));
+        .alloc(get_arr_type(lens));
     program
         .func_mut(*func)
         .dfg_mut()
@@ -279,43 +401,56 @@ fn init_local_array(
         .insert(array_name.clone(), SymEntry::Array(alloc))
         .unwrap();
     init_values
-        .iter()
-        .chain(repeat(&0))
-        .enumerate()
-        .take(len)
-        .for_each(|(idx, &v)| {
-            let value = program.func_mut(*func).dfg_mut().new_value().integer(v);
-            put_arr_elem(
-                program,
-                func,
-                symtable,
-                bb,
-                array_name,
-                idx.try_into().unwrap(),
-                value,
-            );
+        .as_ref()
+        .map(|init_values| {
+            init_values.iter().enumerate().for_each(|(idx, &v)| {
+                let value = program.func_mut(*func).dfg_mut().new_value().integer(v);
+                let indices = modulo_idx(idx as usize, &lens)
+                    .iter()
+                    .map(|&i| {
+                        program
+                            .func_mut(*func)
+                            .dfg_mut()
+                            .new_value()
+                            .integer(i as i32)
+                    })
+                    .collect();
+                put_arr_elem(
+                    program,
+                    func,
+                    symtable,
+                    bb,
+                    array_name,
+                    &indices,
+                    lens.len(),
+                    value,
+                );
+            })
         })
+        .unwrap_or(())
 }
 
 fn init_global_array(
     program: &mut Program,
     symtable: &mut SymTable,
     array_name: &String,
-    len: usize,
-    init_values: Vec<i32>,
+    lens: &Vec<usize>,
+    init_values: Option<&Vec<i32>>,
 ) {
-    let init_v: Value;
-    if init_values.iter().all(|&x| x == 0) {
-        init_v = program
-            .new_value()
-            .zero_init(Type::get_array(Type::get_i32(), len));
-    } else {
-        let agg = init_values
+    let mut init_v = program.new_value().zero_init(get_arr_type(lens));
+    if init_values.is_some() && init_values.unwrap().iter().any(|&x| x != 0) {
+        let mut agg = init_values
+            .as_ref()
+            .unwrap()
             .iter()
-            .chain(repeat(&0))
             .map(|&x| program.new_value().integer(x))
-            .take(len)
             .collect::<Vec<Value>>();
+        for &l in lens.iter().rev().take(lens.len() - 1) {
+            agg = agg
+                .chunks(l)
+                .map(|xs| program.new_value().aggregate(xs.to_vec()))
+                .collect();
+        }
         init_v = program.new_value().aggregate(agg);
     }
 
@@ -430,9 +565,20 @@ impl Expr {
                             }
                         }
                     }
-                    LVal::ArrayElem(name, idx) => {
-                        let arr_v =
-                            get_arr_elem(program, func, symtable, bb, name, idx.reduce(&symtable));
+                    LVal::ArrayElem(name, indices) => {
+                        let indices = indices
+                            .iter()
+                            .map(|x| x.unroll(program, func, symtable, bb))
+                            .collect::<Vec<Value>>();
+                        let arr_v = get_arr_elem(
+                            program,
+                            func,
+                            symtable,
+                            bb,
+                            name,
+                            &indices,
+                            indices.len(),
+                        );
                         let load = program
                             .func_mut(*func)
                             .dfg_mut()
@@ -529,38 +675,50 @@ impl Symbol {
                         .extend([store_v]);
                 }
             }
-            SymbolValue::Arr { len, init } => {
-                let len: usize = len
-                    .reduce(&symtable)
-                    .try_into()
-                    .expect("Array length should be a positive integer.");
-                let init_v = init.as_ref().map(|xs| {
-                    if xs.len() > len {
-                        panic!("Too many initializers for array {}", self.name)
-                    }
-                    xs.iter()
-                        .map(|x| x.reduce(&symtable))
-                        .chain(repeat(0))
-                        .take(len)
-                        .collect::<Vec<i32>>()
-                });
-                init_v.map(|init_values| {
-                    init_local_array(program, func, symtable, bb, &self.name, len, init_values);
-                });
-            }
-            SymbolValue::ConstArr { len, init } => {
-                let len: usize = len
-                    .reduce(&symtable)
-                    .try_into()
-                    .expect("Array length should be a positive integer.");
-                if init.len() > len {
-                    panic!("Too many initializers for array {}", self.name)
-                }
-                let init_values = init
+            SymbolValue::Arr { lens, init } => {
+                let lens: Vec<usize> = lens
                     .iter()
-                    .map(|x| x.reduce(symtable))
-                    .collect::<Vec<i32>>();
-                init_local_array(program, func, symtable, bb, &self.name, len, init_values);
+                    .map(|l| {
+                        l.reduce(&symtable)
+                            .try_into()
+                            .expect("Array length should be a positive integer.")
+                    })
+                    .collect();
+                let init_v = init.as_ref().map(|xs| {
+                    if let InitListElem::List(xs) = xs {
+                        let mut init_values = vec![0i32; lens.iter().product()];
+                        resolve_initializer_list(symtable, &lens, xs, &mut init_values);
+                        init_values
+                    } else {
+                        panic!("Cannot initialize an array with a scalar")
+                    }
+                });
+                init_local_array(program, func, symtable, bb, &self.name, &lens, &init_v)
+            }
+            SymbolValue::ConstArr { lens, init } => {
+                let lens: Vec<usize> = lens
+                    .iter()
+                    .map(|l| {
+                        l.reduce(&symtable)
+                            .try_into()
+                            .expect("Array length should be a positive integer.")
+                    })
+                    .collect();
+                if let InitListElem::List(init) = init {
+                    let mut init_values = vec![0i32; lens.iter().product()];
+                    resolve_initializer_list(symtable, &lens, init, &mut init_values);
+                    init_local_array(
+                        program,
+                        func,
+                        symtable,
+                        bb,
+                        &self.name,
+                        &lens,
+                        &Some(init_values),
+                    );
+                } else {
+                    panic!("Cannot initialize an array with a scalar")
+                }
             }
         }
     }
@@ -608,14 +766,19 @@ impl BlockItem {
                             }
                         }
                     }
-                    LVal::ArrayElem(name, idx) => {
+                    LVal::ArrayElem(name, indices) => {
+                        let indices = indices
+                            .iter()
+                            .map(|x| x.unroll(program, func, symtable, bb))
+                            .collect::<Vec<Value>>();
                         put_arr_elem(
                             program,
                             func,
                             symtable,
                             bb,
                             name,
-                            idx.reduce(&symtable),
+                            &indices,
+                            indices.len(),
                             exprv,
                         );
                     }
@@ -1002,47 +1165,59 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
                             program.set_value_name(v, Some(format!("@{}", &s.name)));
                             symtable.insert(s.name.clone(), SymEntry::Var(v)).unwrap();
                         }
-                        SymbolValue::Arr { len, init } => {
-                            let len: usize = len
-                                .reduce(&symtable)
-                                .try_into()
-                                .expect("Array length should be a positive integer.");
-                            let init_values = init
-                                .as_ref()
-                                .map(|xs| {
-                                    xs.iter().map(|x| x.reduce(&symtable)).collect::<Vec<i32>>()
+                        SymbolValue::Arr { lens, init } => {
+                            let lens: Vec<usize> = lens
+                                .iter()
+                                .map(|l| {
+                                    l.reduce(&symtable)
+                                        .try_into()
+                                        .expect("Array length should be a positive integer.")
                                 })
-                                .unwrap_or(vec![]);
-                            if init_values.len() > len {
-                                panic!("Too many initializers for array {}", s.name)
-                            }
+                                .collect();
+                            let init_v = init.as_ref().map(|xs| {
+                                if let InitListElem::List(xs) = xs {
+                                    let mut init_values = vec![0i32; lens.iter().product()];
+                                    resolve_initializer_list(
+                                        &symtable,
+                                        &lens,
+                                        xs,
+                                        &mut init_values,
+                                    );
+                                    init_values
+                                } else {
+                                    panic!("Cannot initialize an array with a scalar")
+                                }
+                            });
                             init_global_array(
                                 &mut program,
                                 &mut symtable,
                                 &s.name,
-                                len,
-                                init_values,
+                                &lens,
+                                init_v.as_ref(),
                             );
                         }
-                        SymbolValue::ConstArr { len, init } => {
-                            let len: usize = len
-                                .reduce(&symtable)
-                                .try_into()
-                                .expect("Array length should be a positive integer.");
-                            if init.len() > len {
-                                panic!("Too many initializers for array {}", s.name)
-                            }
-                            let init_values = init
+                        SymbolValue::ConstArr { lens, init } => {
+                            let lens: Vec<usize> = lens
                                 .iter()
-                                .map(|x| x.reduce(&symtable))
-                                .collect::<Vec<i32>>();
-                            init_global_array(
-                                &mut program,
-                                &mut symtable,
-                                &s.name,
-                                len,
-                                init_values,
-                            );
+                                .map(|l| {
+                                    l.reduce(&symtable)
+                                        .try_into()
+                                        .expect("Array length should be a positive integer.")
+                                })
+                                .collect();
+                            if let InitListElem::List(init) = init {
+                                let mut init_values = vec![0i32; lens.iter().product()];
+                                resolve_initializer_list(&symtable, &lens, init, &mut init_values);
+                                init_global_array(
+                                    &mut program,
+                                    &mut symtable,
+                                    &s.name,
+                                    &lens,
+                                    Some(&init_values),
+                                );
+                            } else {
+                                panic!("Cannot initialize an array with a scalar")
+                            }
                         }
                     }
                 }

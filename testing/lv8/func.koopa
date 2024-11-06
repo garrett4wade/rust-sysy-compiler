@@ -26,8 +26,7 @@ fun @f(): i32 {
 
 fun @main(): i32 {
 %entry:
-  %2 = load @var
-  %3 = call @f()
-  %4 = add %2, %3
-  ret %4
+  %2 = call @f()
+  %3 = load @var
+  ret %3
 }
