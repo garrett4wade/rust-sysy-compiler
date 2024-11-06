@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 // use crate::reg::RegAllocator;
 use koopa::ir::dfg::DataFlowGraph;
-use koopa::ir::{BinaryOp, Program, TypeKind, Value, ValueKind};
+use koopa::ir::{entities::ValueData, BinaryOp, Program, TypeKind, Value, ValueKind};
 
 // pub trait GenerateASM {
 //     fn to_riscv(self) -> String;
@@ -91,11 +91,7 @@ impl StackFrame {
         let size = value_data.ty().size();
         let pos = self.sp;
         if let ValueKind::Alloc(_) = value_data.kind() {
-            if let TypeKind::Pointer(p) = value_data.ty().kind() {
-                self.sp += p.size();
-            } else {
-                panic!("Alloc should produce a pointer type");
-            }
+            self.sp += ptr_data_size(value_data);
         } else {
             self.sp += size;
         }
@@ -120,6 +116,16 @@ impl StackFrame {
     }
 }
 
+fn ptr_data_size(data: &ValueData) -> usize {
+    // Alloc will produce a pointer type,
+    // but we need to count its allocated size.
+    if let TypeKind::Pointer(p) = data.ty().kind() {
+        return p.size();
+    } else {
+        panic!("Alloc should produce a pointer type");
+    }
+}
+
 fn load_var_or_const(
     dfg: &DataFlowGraph,
     value: &Value,
@@ -137,6 +143,7 @@ fn load_var_or_const(
         }
     }
 }
+
 // Generate RISC-V ASM for one instruction, given the handle of this IR.
 fn generate_one_inst(
     program: &Program,
@@ -349,12 +356,7 @@ pub fn build_riscv(program: &Program) -> String {
         let vd = program.borrow_value(v.clone());
         if let ValueKind::GlobalAlloc(alloc) = vd.kind() {
             let mut seg: Vec<String> = vec![];
-            let size: usize;
-            if let TypeKind::Pointer(p) = vd.ty().kind() {
-                size = p.size();
-            } else {
-                panic!("Global alloc is not a pointer")
-            }
+            let size = ptr_data_size(&vd);
             let name = vd.name().as_ref().unwrap()[1..].to_string();
             seg.push(format!("{}.data", INDENT));
             seg.push(format!("{}.globl {}", INDENT, name));
@@ -377,9 +379,11 @@ pub fn build_riscv(program: &Program) -> String {
 
     // Functions.
     for (_, func_data) in program.funcs() {
+        // Ignore library functions that only have a declaration.
         if func_data.layout().entry_bb().is_none() {
             continue;
         }
+
         let mut func_riscv: Vec<String> = vec![];
 
         // Function name. Remove the starting "@" or "%".
@@ -410,13 +414,7 @@ pub fn build_riscv(program: &Program) -> String {
                         ss_var += inst_data.ty().size() as i64;
                     }
                     ValueKind::Alloc(_) => {
-                        // Alloc will produce a pointer type,
-                        // but we need to count its allocated size.
-                        if let TypeKind::Pointer(p) = inst_data.ty().kind() {
-                            ss_var += p.size() as i64;
-                        } else {
-                            panic!("Alloc should produce a pointer type");
-                        }
+                        ss_var += ptr_data_size(inst_data) as i64;
                     }
                     ValueKind::Branch(..)
                     | ValueKind::Jump(..)
@@ -454,7 +452,8 @@ pub fn build_riscv(program: &Program) -> String {
             for (inst_v, _) in bb_node.insts() {
                 generate_one_inst(&program, dfg, inst_v, &mut stack_frame, &mut bb_instrs);
                 if matches!(dfg.value(inst_v.clone()).kind(), ValueKind::Return(_)) {
-                    // epilogue
+                    // Epilogue
+                    // Recover $ra and the stack frame.
                     if ss_ra > 0 {
                         bb_instrs.push(format!("lw ra, {}(sp)", ss - ss_ra));
                     }
@@ -468,6 +467,7 @@ pub fn build_riscv(program: &Program) -> String {
             func_instrs.push(bb_instrs);
         }
 
+        // Organize BBs and push to the global program.
         for (i, (bb_instrs, bb_name)) in func_instrs.into_iter().zip(func_bbs).enumerate() {
             if i > 0 {
                 func_riscv.push(format!("{}:", bb_name));
