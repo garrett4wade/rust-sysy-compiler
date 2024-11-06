@@ -10,6 +10,8 @@ pub enum SymEntry {
     Var(Value),
     Func(Function),
     FuncParam(Value),
+    Array(Value),
+    ConstArray(Value),
 }
 pub struct SymTable {
     parent: Vec<Rc<RefCell<HashMap<String, SymEntry>>>>,

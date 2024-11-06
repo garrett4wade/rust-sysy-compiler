@@ -35,9 +35,15 @@ pub struct Block {
 }
 
 #[derive(Debug, Clone)]
+pub enum LVal {
+    Ident(String),
+    ArrayElem(String, Box<Expr>),
+}
+
+#[derive(Debug, Clone)]
 pub enum BlockItem {
     Decl(Vec<Symbol>),
-    Assign(String, Box<Expr>),
+    Assign(LVal, Box<Expr>),
     Ret(Option<Box<Expr>>),
     Block(Block),
     Expr(Option<Box<Expr>>),
@@ -58,7 +64,7 @@ pub enum BlockItem {
 pub enum Expr {
     Binary(Box<Expr>, OpCode, Box<Expr>),
     Unary(OpCode, Box<Expr>),
-    Symbol(String),
+    Symbol(LVal),
     Number(i32),
     FuncCall {
         funcname: String,
@@ -76,6 +82,14 @@ pub struct Symbol {
 pub enum SymbolValue {
     Const(Box<Expr>),
     Var(Option<Box<Expr>>), // init val
+    ConstArr {
+        len: Box<Expr>,
+        init: Vec<Box<Expr>>,
+    },
+    Arr {
+        len: Box<Expr>,
+        init: Option<Vec<Box<Expr>>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -159,16 +173,21 @@ impl Expr {
                     OpCode::Not => panic!("Unsupported binary operator: {:?}", op),
                 }
             }
-            Expr::Symbol(name) => {
-                let symv = symtable.get(name).unwrap();
-                match symv {
-                    SymEntry::Const(v) => v.clone(),
-                    _ => panic!(
-                        "Cannot reduce an expression at compilation with a variable: {}",
-                        name
-                    ),
+            Expr::Symbol(lval) => match lval {
+                LVal::Ident(name) => {
+                    let symv = symtable.get(name).unwrap();
+                    match symv {
+                        SymEntry::Const(v) => v.clone(),
+                        _ => panic!(
+                            "Cannot reduce an expression at compilation with a variable: {}",
+                            name
+                        ),
+                    }
                 }
-            }
+                LVal::ArrayElem(..) => {
+                    panic!("Evaluating an array element at compliation is not supported.")
+                }
+            },
             Expr::FuncCall { .. } => panic!("Cannot reduce a function."),
         }
     }

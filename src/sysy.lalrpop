@@ -1,4 +1,4 @@
-use crate::ast::{CompUnit, SysYType, Block, BlockItem, Expr, OpCode, Symbol, SymbolValue, FuncParam, CompUnitDecl};
+use crate::ast::{CompUnit, SysYType, Block, BlockItem, Expr, OpCode, Symbol, SymbolValue, FuncParam, CompUnitDecl, LVal};
 
 grammar;
 
@@ -64,12 +64,10 @@ NonIfBlockItem: BlockItem = {
   "continue" ";" => BlockItem::Continue,
 };
 
-ConstVarDef: Symbol = <k:Ident> "=" <e:Expr> => {
-  Symbol {
-    name: k,
-    value: SymbolValue::Const(e),
-  }
-};
+ConstVarDef: Symbol = {
+  <k:Ident> "=" <e:Expr> => Symbol {name: k, value: SymbolValue::Const(e)},
+  <k:Ident> "[" <l:Expr> "]" "=" "{" <init:List<Expr, ",">> "}" => Symbol {name: k, value: SymbolValue::ConstArr {len: l, init: init}},
+}
 
 VariableDef: Symbol = {
   <k:Ident> "=" <e:Expr> => Symbol {
@@ -77,6 +75,8 @@ VariableDef: Symbol = {
     value: SymbolValue::Var(Some(e)),
   },
   <k:Ident> => Symbol {name: k, value: SymbolValue::Var(None)},
+  <k:Ident> "[" <l:Expr> "]" => Symbol {name: k, value: SymbolValue::Arr {len: l, init: None}},
+  <k:Ident> "[" <l:Expr> "]" "=" "{" <init:List<Expr, ",">> "}" => Symbol {name: k, value: SymbolValue::Arr {len: l, init: Some(init)}},
 };
 
 // Expression
@@ -142,7 +142,10 @@ UnaryOpCode: OpCode = {
   "!" => OpCode::Not,
 }
 
-LVal: String = Ident;
+LVal: LVal = {
+  Ident => LVal::Ident(<>),
+  <k:Ident> "[" <idx:Expr> "]" => LVal::ArrayElem(k, idx),
+}
 
 Ident: String = r"[_a-zA-Z][_a-zA-Z0-9]*" => <>.to_string();
 

@@ -1,9 +1,10 @@
 use koopa::ir::builder::{BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::{BasicBlock, BinaryOp, Function, FunctionData, Program, Type, Value, ValueKind};
+use std::iter::repeat;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::{
-    Block, BlockItem, CompUnit, CompUnitDecl, Expr, OpCode, Symbol, SymbolValue, SysYType,
+    Block, BlockItem, CompUnit, CompUnitDecl, Expr, LVal, OpCode, Symbol, SymbolValue, SysYType,
 };
 use crate::symtable::{SymEntry, SymTable};
 
@@ -189,6 +190,141 @@ fn shortpath_eval(
         _ => unreachable!(),
     }
 }
+
+fn get_arr_elem(
+    program: &mut Program,
+    func: &Function,
+    symtable: &mut SymTable,
+    bb: &mut BasicBlock,
+    array_name: &String,
+    idx: i32,
+) -> Value {
+    let array = symtable
+        .get(array_name)
+        .expect(format!("Array {} not found", array_name).as_str());
+    match array {
+        SymEntry::Array(array) | SymEntry::ConstArray(array) => {
+            let idx = program.func_mut(*func).dfg_mut().new_value().integer(idx);
+            let ptr = program
+                .func_mut(*func)
+                .dfg_mut()
+                .new_value()
+                .get_elem_ptr(array, idx);
+            program
+                .func_mut(*func)
+                .layout_mut()
+                .bb_mut(bb.clone())
+                .insts_mut()
+                .extend([ptr]);
+            ptr
+        }
+        _ => panic!("{} is not an array or a const array", array_name),
+    }
+}
+
+fn put_arr_elem(
+    program: &mut Program,
+    func: &Function,
+    symtable: &mut SymTable,
+    bb: &mut BasicBlock,
+    array_name: &String,
+    idx: i32,
+    value: Value,
+) {
+    let array = symtable
+        .get(array_name)
+        .expect(format!("Array {} not found", array_name).as_str());
+    match array {
+        SymEntry::ConstArray(_) => panic!("Cannot modify a const array"),
+        _ => {}
+    }
+    let ptr = get_arr_elem(program, func, symtable, bb, array_name, idx);
+    let store = program
+        .func_mut(*func)
+        .dfg_mut()
+        .new_value()
+        .store(value, ptr.clone());
+    program
+        .func_mut(*func)
+        .layout_mut()
+        .bb_mut(bb.clone())
+        .insts_mut()
+        .extend([store]);
+}
+fn init_local_array(
+    program: &mut Program,
+    func: &Function,
+    symtable: &mut SymTable,
+    bb: &mut BasicBlock,
+    array_name: &String,
+    len: usize,
+    init_values: Vec<i32>,
+) {
+    let alloc = program
+        .func_mut(*func)
+        .dfg_mut()
+        .new_value()
+        .alloc(Type::get_array(Type::get_i32(), len));
+    program
+        .func_mut(*func)
+        .dfg_mut()
+        .set_value_name(alloc, Some(format!("@{}", array_name)));
+    program
+        .func_mut(*func)
+        .layout_mut()
+        .bb_mut(bb.clone())
+        .insts_mut()
+        .extend([alloc]);
+    symtable
+        .insert(array_name.clone(), SymEntry::Array(alloc))
+        .unwrap();
+    init_values
+        .iter()
+        .chain(repeat(&0))
+        .enumerate()
+        .take(len)
+        .for_each(|(idx, &v)| {
+            let value = program.func_mut(*func).dfg_mut().new_value().integer(v);
+            put_arr_elem(
+                program,
+                func,
+                symtable,
+                bb,
+                array_name,
+                idx.try_into().unwrap(),
+                value,
+            );
+        })
+}
+
+fn init_global_array(
+    program: &mut Program,
+    symtable: &mut SymTable,
+    array_name: &String,
+    len: usize,
+    init_values: Vec<i32>,
+) {
+    let init_v: Value;
+    if init_values.iter().all(|&x| x == 0) {
+        init_v = program
+            .new_value()
+            .zero_init(Type::get_array(Type::get_i32(), len));
+    } else {
+        let agg = init_values
+            .iter()
+            .chain(repeat(&0))
+            .map(|&x| program.new_value().integer(x))
+            .take(len)
+            .collect::<Vec<Value>>();
+        init_v = program.new_value().aggregate(agg);
+    }
+
+    let v = program.new_value().global_alloc(init_v);
+    program.set_value_name(v, Some(format!("@{}", array_name)));
+    symtable
+        .insert(array_name.clone(), SymEntry::Array(v))
+        .unwrap();
+}
 // Converting an AST to Koopa IR using koopa::ir API.
 impl Expr {
     /*
@@ -251,41 +387,64 @@ impl Expr {
                     v
                 }
             },
-            Expr::Symbol(name) => {
-                let symv = symtable.get(name).unwrap();
-                let dfg = program.func_mut(*func).dfg_mut();
-                match symv {
-                    SymEntry::Const(v) => dfg.new_value().integer(v.clone()),
-                    SymEntry::Var(v) => {
-                        let v = dfg.new_value().load(v.clone());
-                        program
-                            .func_mut(*func)
-                            .layout_mut()
-                            .bb_mut(bb.clone())
-                            .insts_mut()
-                            .extend([v]);
-                        v
+            Expr::Symbol(lval) => {
+                match lval {
+                    LVal::Ident(name) => {
+                        let symv = symtable.get(name).unwrap();
+                        let dfg = program.func_mut(*func).dfg_mut();
+                        match symv {
+                            SymEntry::Const(v) => dfg.new_value().integer(v.clone()),
+                            SymEntry::Var(v) => {
+                                let v = dfg.new_value().load(v.clone());
+                                program
+                                    .func_mut(*func)
+                                    .layout_mut()
+                                    .bb_mut(bb.clone())
+                                    .insts_mut()
+                                    .extend([v]);
+                                v
+                            }
+                            SymEntry::FuncParam(v) => {
+                                let ty = dfg.value(v).ty().clone();
+                                let alloc = dfg.new_value().alloc(ty);
+                                dfg.set_value_name(alloc.clone(), Some(format!("%{}", name)));
+                                let store = dfg.new_value().store(v.clone(), alloc.clone());
+                                let load = dfg.new_value().load(alloc.clone());
+                                program
+                                    .func_mut(*func)
+                                    .layout_mut()
+                                    .bb_mut(bb.clone())
+                                    .insts_mut()
+                                    .extend([alloc, store, load]);
+                                // Replace the original symbol with the new one.
+                                symtable
+                                    .replace(name.clone(), SymEntry::Var(alloc))
+                                    .unwrap();
+                                load
+                            }
+                            SymEntry::Array(_) | SymEntry::ConstArray(_) => {
+                                panic!("Unknown how to deal with an array in expression.")
+                            }
+                            SymEntry::Func(..) => {
+                                panic!("Function call in expression but expressed as Expr::Symbol.")
+                            }
+                        }
                     }
-                    SymEntry::FuncParam(v) => {
-                        let ty = dfg.value(v).ty().clone();
-                        let alloc = dfg.new_value().alloc(ty);
-                        dfg.set_value_name(alloc.clone(), Some(format!("%{}", name)));
-                        let store = dfg.new_value().store(v.clone(), alloc.clone());
-                        let load = dfg.new_value().load(alloc.clone());
+                    LVal::ArrayElem(name, idx) => {
+                        let arr_v =
+                            get_arr_elem(program, func, symtable, bb, name, idx.reduce(&symtable));
+                        let load = program
+                            .func_mut(*func)
+                            .dfg_mut()
+                            .new_value()
+                            .load(arr_v.clone());
                         program
                             .func_mut(*func)
                             .layout_mut()
                             .bb_mut(bb.clone())
                             .insts_mut()
-                            .extend([alloc, store, load]);
-                        // Replace the original symbol with the new one.
-                        symtable
-                            .replace(name.clone(), SymEntry::Var(alloc))
-                            .unwrap();
+                            .extend([arr_v, load]);
                         load
-                    }
-                    SymEntry::Func(..) => {
-                        panic!("Function call in expression but expressed as Expr::Symbol.")
                     }
                 }
             }
@@ -370,6 +529,39 @@ impl Symbol {
                         .extend([store_v]);
                 }
             }
+            SymbolValue::Arr { len, init } => {
+                let len: usize = len
+                    .reduce(&symtable)
+                    .try_into()
+                    .expect("Array length should be a positive integer.");
+                let init_v = init.as_ref().map(|xs| {
+                    if xs.len() > len {
+                        panic!("Too many initializers for array {}", self.name)
+                    }
+                    xs.iter()
+                        .map(|x| x.reduce(&symtable))
+                        .chain(repeat(0))
+                        .take(len)
+                        .collect::<Vec<i32>>()
+                });
+                init_v.map(|init_values| {
+                    init_local_array(program, func, symtable, bb, &self.name, len, init_values);
+                });
+            }
+            SymbolValue::ConstArr { len, init } => {
+                let len: usize = len
+                    .reduce(&symtable)
+                    .try_into()
+                    .expect("Array length should be a positive integer.");
+                if init.len() > len {
+                    panic!("Too many initializers for array {}", self.name)
+                }
+                let init_values = init
+                    .iter()
+                    .map(|x| x.reduce(symtable))
+                    .collect::<Vec<i32>>();
+                init_local_array(program, func, symtable, bb, &self.name, len, init_values);
+            }
         }
     }
 }
@@ -389,26 +581,44 @@ impl BlockItem {
                     s.add_to_bb(program, func, symtable, bb);
                 }
             }
-            BlockItem::Assign(name, expr) => {
+            BlockItem::Assign(lval, expr) => {
                 let exprv = expr.unroll(program, func, symtable, bb);
-                let v = symtable.get(name).unwrap();
-                match v {
-                    SymEntry::Var(v) => {
-                        instrs.push(
-                            program
-                                .func_mut(*func)
-                                .dfg_mut()
-                                .new_value()
-                                .store(exprv, v.clone()),
+                match lval {
+                    LVal::Ident(name) => {
+                        let v = symtable.get(name).unwrap();
+                        match v {
+                            SymEntry::Var(v) => {
+                                instrs.push(
+                                    program
+                                        .func_mut(*func)
+                                        .dfg_mut()
+                                        .new_value()
+                                        .store(exprv, v.clone()),
+                                );
+                            }
+                            SymEntry::Func(_) => {
+                                panic!("Cannot assign to a function: {}", name)
+                            }
+                            SymEntry::FuncParam(_) => {
+                                panic!("Cannot assign to a function parameter: {}", name)
+                            }
+                            SymEntry::Const(_) => panic!("Cannot assign to a constant: {}", name),
+                            SymEntry::Array(_) | SymEntry::ConstArray(_) => {
+                                panic!("Cannot assign to an array: {}", name)
+                            }
+                        }
+                    }
+                    LVal::ArrayElem(name, idx) => {
+                        put_arr_elem(
+                            program,
+                            func,
+                            symtable,
+                            bb,
+                            name,
+                            idx.reduce(&symtable),
+                            exprv,
                         );
                     }
-                    SymEntry::Func(_) => {
-                        panic!("Cannot assign to a function: {}", name)
-                    }
-                    SymEntry::FuncParam(_) => {
-                        panic!("Cannot assign to a function parameter: {}", name)
-                    }
-                    SymEntry::Const(_) => panic!("Cannot assign to a constant: {}", name),
                 }
             }
             BlockItem::Ret(expr) => {
@@ -738,7 +948,7 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
         symtable.insert(name.to_string(), SymEntry::Func(program.new_func(data)))?;
     }
 
-    // Insert all functions to the symtable.
+    // Insert all functions and global variables to the symtable.
     for decl in comp_unit.defs.iter() {
         match decl {
             CompUnitDecl::FuncDef {
@@ -791,6 +1001,48 @@ pub fn build_program(comp_unit: &CompUnit) -> Result<Program, String> {
                             let v = program.new_value().global_alloc(iv);
                             program.set_value_name(v, Some(format!("@{}", &s.name)));
                             symtable.insert(s.name.clone(), SymEntry::Var(v)).unwrap();
+                        }
+                        SymbolValue::Arr { len, init } => {
+                            let len: usize = len
+                                .reduce(&symtable)
+                                .try_into()
+                                .expect("Array length should be a positive integer.");
+                            let init_values = init
+                                .as_ref()
+                                .map(|xs| {
+                                    xs.iter().map(|x| x.reduce(&symtable)).collect::<Vec<i32>>()
+                                })
+                                .unwrap_or(vec![]);
+                            if init_values.len() > len {
+                                panic!("Too many initializers for array {}", s.name)
+                            }
+                            init_global_array(
+                                &mut program,
+                                &mut symtable,
+                                &s.name,
+                                len,
+                                init_values,
+                            );
+                        }
+                        SymbolValue::ConstArr { len, init } => {
+                            let len: usize = len
+                                .reduce(&symtable)
+                                .try_into()
+                                .expect("Array length should be a positive integer.");
+                            if init.len() > len {
+                                panic!("Too many initializers for array {}", s.name)
+                            }
+                            let init_values = init
+                                .iter()
+                                .map(|x| x.reduce(&symtable))
+                                .collect::<Vec<i32>>();
+                            init_global_array(
+                                &mut program,
+                                &mut symtable,
+                                &s.name,
+                                len,
+                                init_values,
+                            );
                         }
                     }
                 }
