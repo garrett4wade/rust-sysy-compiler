@@ -70,11 +70,8 @@ impl DeduceFrom<&Expr> for KoopaExpr {
                     let symv = symtable.get(name).unwrap();
                     match symv {
                         SymEntry::Const(v) => Const(v),
-                        SymEntry::VarType => Var(name.clone()),
-                        SymEntry::FuncParamType => {
-                            let ty = symtable.get(name).unwrap().get_func_param_ty();
-                            FuncParam(name.clone(), ty)
-                        }
+                        SymEntry::VarType(..) => Var(name.clone()),
+                        SymEntry::FuncParamType(_) => FuncParam(name.clone()),
                         _ => {
                             panic!("Invalid expression element.")
                         }
@@ -167,7 +164,7 @@ impl DeduceFrom<&Block> for KoopaBlock {
                         LVal::Ident(name) => {
                             let v = symtable.get(&name).unwrap();
                             match v {
-                                SymEntry::VarType => {
+                                SymEntry::VarType(_) => {
                                     koopa_items.push(KoopaBlockItem::Instr(Assign(
                                         Box::new(KoopaVar::empty(name.clone())),
                                         Box::new(exprv),
@@ -270,13 +267,28 @@ impl DeduceFrom<&CompUnitDecl> for KoopaFunc {
                 params,
                 block,
             } => {
-                let param_names = params.iter().map(|p| Some(p.ident.clone())).collect();
+                let param_names = params
+                    .iter()
+                    .map(|p| Some(p.ident.clone()))
+                    .collect::<Vec<Option<String>>>();
+                let param_types = params
+                    .iter()
+                    .map(|p| (&p.type_).into())
+                    .collect::<Vec<Type>>();
+                symtable.fork();
+                for (p, ty) in param_names.iter().zip(param_types.iter()) {
+                    symtable
+                        .insert(p.clone().unwrap(), SymEntry::FuncParamType(ty.clone()))
+                        .unwrap();
+                }
+                let block = KoopaBlock::deduce_from(block, symtable);
+                symtable.join().unwrap();
                 KoopaFunc {
                     name: ident.clone(),
-                    param_types: params.iter().map(|p| (&p.type_).into()).collect(),
+                    param_types,
                     param_names,
                     ret_type: type_.into(),
-                    block: Some(KoopaBlock::deduce_from(block, symtable)),
+                    block: Some(block),
                 }
             }
             _ => panic!("Invalid conversion"),
@@ -326,14 +338,19 @@ impl From<&CompUnit> for KoopaProgram {
                 CompUnitDecl::VarDecl(symbols) => {
                     for s in symbols {
                         let item = match &s.value {
-                            SymbolValue::Const(expr) => KoopaFuncGlobalVarDecl::Const(KoopaConst(
-                                s.name.clone(),
-                                expr.reduce(&symtable),
-                            )),
-                            SymbolValue::Var(e) => KoopaFuncGlobalVarDecl::Var(KoopaVar(
-                                s.name.clone(),
-                                e.as_ref().map(|e| e.reduce(&symtable)),
-                            )),
+                            SymbolValue::Const(expr) => {
+                                let c = KoopaConst(s.name.clone(), expr.reduce(&symtable));
+                                c.decl(&mut symtable);
+                                KoopaFuncGlobalVarDecl::Const(c)
+                            }
+                            SymbolValue::Var(e) => {
+                                let va = KoopaVar(
+                                    s.name.clone(),
+                                    e.as_ref().map(|e| e.reduce(&symtable)),
+                                );
+                                va.decl(&mut symtable);
+                                KoopaFuncGlobalVarDecl::Var(va)
+                            }
                             SymbolValue::Arr { lens, init } => {
                                 let mut _init: InitListElem;
                                 if init.is_none() {

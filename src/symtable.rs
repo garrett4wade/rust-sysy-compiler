@@ -13,8 +13,8 @@ pub enum SymEntry {
     Array(Value, Vec<usize>),
     ConstArray(Value, Vec<usize>),
     // Used for conversion
-    VarType,
-    FuncParamType,
+    VarType(Type),
+    FuncParamType(Type),
 }
 
 impl SymEntry {
@@ -34,6 +34,7 @@ impl SymEntry {
 
     pub fn get_var_ty(&self) -> Type {
         match self {
+            SymEntry::VarType(ty) => ty.clone(),
             SymEntry::Var(_, ty) => ty.clone(),
             _ => panic!("SymEntry is not a variable"),
         }
@@ -49,14 +50,15 @@ impl SymEntry {
     pub fn get_func_param(&self) -> Value {
         match self {
             SymEntry::FuncParam(v, _) => v.clone(),
-            _ => panic!("SymEntry is not a function parameter"),
+            _ => panic!("SymEntry is not a function parameter: {:?}", self),
         }
     }
 
     pub fn get_func_param_ty(&self) -> Type {
         match self {
+            SymEntry::FuncParamType(ty) => ty.clone(),
             SymEntry::FuncParam(_, ty) => ty.clone(),
-            _ => panic!("SymEntry is not a function parameter"),
+            _ => panic!("SymEntry is not a function parameter: {:?}", self),
         }
     }
 

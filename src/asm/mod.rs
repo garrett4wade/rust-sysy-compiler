@@ -368,8 +368,13 @@ pub fn build_riscv(program: &Program) -> String {
                 } else {
                     seg.push(format!("{}.word {}", INDENT, i.value()));
                 }
+            } else if let ValueKind::ZeroInit(_) = program.borrow_value(initv).kind() {
+                seg.push(format!("{}.zero {}", INDENT, size));
             } else {
-                panic!("Global variable is not an integer.")
+                panic!(
+                    "Global variable is not an integer: {:?}",
+                    program.borrow_value(initv)
+                )
             }
             riscv.push(seg.join("\n"))
         } else {

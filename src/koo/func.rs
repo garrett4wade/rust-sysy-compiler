@@ -1,4 +1,4 @@
-use koopa::ir::{FunctionData, Type};
+use koopa::ir::{FunctionData, Type, Value};
 
 use crate::koo::block::KoopaBlock;
 use crate::koo::ctx::{KoopaGlobalContext, KoopaLocalContext};
@@ -23,7 +23,7 @@ impl KoopaFunc {
             format!("@{}", &self.name),
             self.param_names
                 .iter()
-                .cloned()
+                .map(|s| s.as_ref().map(|ss| format!("@{}", ss)))
                 .zip(self.param_types.iter().cloned())
                 .collect(),
             self.ret_type.clone(),
@@ -33,21 +33,34 @@ impl KoopaFunc {
     // Implement a function defined before.
     pub fn implement(&self, ctx: &mut KoopaLocalContext) {
         // Function parameters.
-        for (pv, p) in ctx
+        let params = ctx
             .program
-            .func(ctx.func)
+            .func_mut(ctx.func)
             .params()
-            .iter()
-            .zip(self.param_names.iter())
-        {
+            .into_iter()
+            .cloned()
+            .zip(self.param_names.iter().cloned())
+            .collect::<Vec<(Value, Option<String>)>>();
+        for (pv, p) in params.into_iter() {
             let pname = p
                 .as_ref()
                 .expect("Cannot implement function with anonymous parameters")
                 .clone();
-            let ty = ctx.program.func(ctx.func).dfg().value(pv.clone()).ty();
+            let ty = ctx
+                .program
+                .func(ctx.func)
+                .dfg()
+                .value(pv.clone())
+                .ty()
+                .clone();
+            let alloc = ctx.alloc(ty.clone());
+            ctx.set_value_name(&alloc, &format!("%{}", p.unwrap()));
+            let store = ctx.store(pv.clone(), alloc.clone());
             ctx.symtable
-                .insert(pname, SymEntry::FuncParam(pv.clone(), ty.clone()))
+                .insert(pname, SymEntry::Var(alloc, ty.clone()))
                 .expect("Inserting func param fails");
+            ctx.new_instr(alloc);
+            ctx.new_instr(store);
         }
 
         // A recursive conversion call. A block may have nested blocks.

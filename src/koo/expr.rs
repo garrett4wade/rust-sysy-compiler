@@ -1,12 +1,11 @@
 use crate::koo::ctx::{KoopaContext, KoopaLocalContext};
-use koopa::ir::{BinaryOp, Type, Value};
+use koopa::ir::{BinaryOp, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::ast::OpCode;
 use crate::koo::array::{KoopaArray, KoopaVarArray};
 use crate::koo::traits::{KoopaLocalDeclaration, KoopaLocalInit};
 use crate::koo::var::KoopaVar;
-use crate::symtable::SymEntry;
 
 fn shortpath_eval(
     ctx: &mut KoopaLocalContext,
@@ -80,7 +79,7 @@ pub enum KoopaExpr {
     Binary(Box<KoopaExpr>, OpCode, Box<KoopaExpr>),
     Const(i32),
     Var(String),
-    FuncParam(String, Type),
+    FuncParam(String),
     ArrayElem(String, Vec<KoopaExpr>),
     FuncCall(String, Vec<KoopaExpr>),
 }
@@ -119,23 +118,10 @@ impl KoopaExpr {
                 }
             },
             KoopaExpr::Const(n) => ctx.integer(n.clone()),
-            KoopaExpr::Var(name) => {
+            KoopaExpr::Var(name) | KoopaExpr::FuncParam(name) => {
                 let x = ctx.symtable().get(name).unwrap().get_var();
                 let v = ctx.load(x);
                 ctx.new_instr(v)
-            }
-            KoopaExpr::FuncParam(name, ty) => {
-                let alloc = ctx.alloc(ty.clone());
-                ctx.set_value_name(&alloc, name);
-                let v = ctx.symtable.get(name).unwrap().get_func_param();
-                let store = ctx.store(v.clone(), alloc.clone());
-                let load = ctx.load(alloc.clone());
-                ctx.symtable
-                    .replace(name.clone(), SymEntry::Var(alloc, ty.clone()))
-                    .unwrap();
-                ctx.new_instr(alloc);
-                ctx.new_instr(store);
-                ctx.new_instr(load)
             }
             KoopaExpr::ArrayElem(name, indices) => {
                 let arr_v = KoopaVarArray::empty(name.clone()).get_coord_var(ctx, indices);

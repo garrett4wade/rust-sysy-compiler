@@ -43,7 +43,7 @@ impl KoopaVar {
     pub fn decl(&self, symtable: &mut SymTable) {
         // Allocate variable and set its name, if it has never been declared.
         symtable
-            .insert(self.0.clone(), SymEntry::VarType)
+            .insert(self.0.clone(), SymEntry::VarType(Type::get_i32()))
             .unwrap();
     }
 }
