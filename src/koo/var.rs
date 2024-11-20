@@ -10,7 +10,7 @@ use crate::symtable::{SymEntry, SymTable};
 pub struct KoopaConst(pub String, pub i32);
 
 impl KoopaConst {
-    fn decl(&self, symtable: &mut SymTable) {
+    pub fn decl(&self, symtable: &mut SymTable) {
         // Constants in the SysY language must be determined during compilation.
         // Just replace them with values recorded in the symbol table.
         // No need to add additional IR instructions.
@@ -38,6 +38,13 @@ pub struct KoopaVar(pub String, pub Option<i32>);
 impl KoopaVar {
     pub fn empty(name: String) -> Self {
         KoopaVar(name, None)
+    }
+
+    pub fn decl(&self, symtable: &mut SymTable) {
+        // Allocate variable and set its name, if it has never been declared.
+        symtable
+            .insert(self.0.clone(), SymEntry::VarType)
+            .unwrap();
     }
 }
 

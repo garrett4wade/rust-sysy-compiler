@@ -12,6 +12,9 @@ pub enum SymEntry {
     FuncParam(Value, Type),
     Array(Value, Vec<usize>),
     ConstArray(Value, Vec<usize>),
+    // Used for conversion
+    VarType,
+    FuncParamType,
 }
 
 impl SymEntry {

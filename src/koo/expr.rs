@@ -114,12 +114,18 @@ impl KoopaExpr {
                 _ => {
                     let l = lhs.unroll(ctx);
                     let r = rhs.unroll(ctx);
+                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(l).kind());
+                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(r).kind());
                     let v = ctx.binary(op.into(), l, r);
                     ctx.new_instr(v)
                 }
             },
             KoopaExpr::Const(n) => ctx.integer(n.clone()),
-            KoopaExpr::Var(name) => ctx.symtable().get(name).unwrap().get_var(),
+            KoopaExpr::Var(name) => {
+                let x = ctx.symtable().get(name).unwrap().get_var();
+                let v = ctx.load(x);
+                ctx.new_instr(v)
+            }
             KoopaExpr::FuncParam(name, ty) => {
                 let alloc = ctx.alloc(ty.clone());
                 ctx.set_value_name(&alloc, name);

@@ -15,18 +15,18 @@ use crate::symtable::{SymEntry, SymTable};
 
 // A helper trait that uses SymTable for translation.
 pub trait DeduceFrom<T> {
-    fn deduce_from(t: T, symtable: &SymTable) -> Self;
+    fn deduce_from(t: T, symtable: &mut SymTable) -> Self;
 }
 
 pub trait DeduceInto<T> {
-    fn deduce_into(self, symtable: &SymTable) -> T;
+    fn deduce_into(self, symtable: &mut SymTable) -> T;
 }
 
 impl<U, T> DeduceInto<T> for U
 where
     T: DeduceFrom<U>,
 {
-    fn deduce_into(self, symtable: &SymTable) -> T {
+    fn deduce_into(self, symtable: &mut SymTable) -> T {
         T::deduce_from(self, symtable)
     }
 }
@@ -35,7 +35,7 @@ impl<U, T> DeduceFrom<Box<U>> for T
 where
     T: DeduceFrom<U>,
 {
-    fn deduce_from(t: Box<U>, symtable: &SymTable) -> Self {
+    fn deduce_from(t: Box<U>, symtable: &mut SymTable) -> Self {
         T::deduce_from(*t, symtable)
     }
 }
@@ -52,7 +52,7 @@ impl From<&SysYType> for Type {
 
 // Expression conversion.
 impl DeduceFrom<&Expr> for KoopaExpr {
-    fn deduce_from(t: &Expr, symtable: &SymTable) -> Self {
+    fn deduce_from(t: &Expr, symtable: &mut SymTable) -> Self {
         use KoopaExpr::*;
         match t {
             Expr::Number(n) => Number(*n),
@@ -70,16 +70,13 @@ impl DeduceFrom<&Expr> for KoopaExpr {
                     let symv = symtable.get(name).unwrap();
                     match symv {
                         SymEntry::Const(v) => Const(v),
-                        SymEntry::Var(..) => Var(name.clone()),
-                        SymEntry::FuncParam(..) => {
+                        SymEntry::VarType => Var(name.clone()),
+                        SymEntry::FuncParamType => {
                             let ty = symtable.get(name).unwrap().get_func_param_ty();
                             FuncParam(name.clone(), ty)
                         }
-                        SymEntry::Array(..) | SymEntry::ConstArray(..) => {
-                            panic!("Unknown how to deal with an array in expression.")
-                        }
-                        SymEntry::Func(..) => {
-                            panic!("Function call in expression but expressed as Expr::Symbol.")
+                        _ => {
+                            panic!("Invalid expression element.")
                         }
                     }
                 }
@@ -103,7 +100,7 @@ impl DeduceFrom<&Expr> for KoopaExpr {
 
 // Block conversion.
 impl DeduceFrom<&Block> for KoopaBlock {
-    fn deduce_from(t: &Block, symtable: &SymTable) -> Self {
+    fn deduce_from(t: &Block, symtable: &mut SymTable) -> Self {
         use KoopaInstr::*;
         let mut koopa_items = vec![];
         for item in t.items.iter() {
@@ -128,19 +125,24 @@ impl DeduceFrom<&Block> for KoopaBlock {
                                     koopa_items.push(KoopaBlockItem::Instr(LocalInit(Box::new(v))));
                                 }
                             }
-                            SymbolValue::Const(c) => koopa_items.push(KoopaBlockItem::Instr(
-                                LocalDecl(Box::new(KoopaConst(s.name.clone(), c.reduce(symtable)))),
-                            )),
+                            SymbolValue::Const(c) => {
+                                let x = KoopaConst(s.name.clone(), c.reduce(symtable));
+                                x.decl(symtable);
+                                koopa_items.push(KoopaBlockItem::Instr(LocalDecl(Box::new(x))))
+                            }
                             SymbolValue::Var(c) => {
-                                let item = KoopaVar(
-                                    s.name.clone(),
-                                    c.as_ref().map(|x| x.reduce(symtable)),
-                                );
+                                let item = KoopaVar(s.name.clone(), None);
+                                item.decl(symtable);
                                 koopa_items
                                     .push(KoopaBlockItem::Instr(LocalDecl(Box::new(item.clone()))));
                                 if c.is_some() {
-                                    koopa_items
-                                        .push(KoopaBlockItem::Instr(LocalInit(Box::new(item))));
+                                    koopa_items.push(KoopaBlockItem::Instr(Assign(
+                                        Box::new(item),
+                                        Box::new(KoopaExpr::deduce_from(
+                                            c.as_ref().unwrap().as_ref(),
+                                            symtable,
+                                        )),
+                                    )));
                                 }
                             }
                             SymbolValue::ConstArr { lens, init } => {
@@ -165,23 +167,14 @@ impl DeduceFrom<&Block> for KoopaBlock {
                         LVal::Ident(name) => {
                             let v = symtable.get(&name).unwrap();
                             match v {
-                                SymEntry::Var(..) => {
+                                SymEntry::VarType => {
                                     koopa_items.push(KoopaBlockItem::Instr(Assign(
                                         Box::new(KoopaVar::empty(name.clone())),
                                         Box::new(exprv),
                                     )));
                                 }
-                                SymEntry::Func(_) => {
-                                    panic!("Cannot assign to a function: {}", name)
-                                }
-                                SymEntry::FuncParam(..) => {
-                                    panic!("Cannot assign to a function parameter: {}", name)
-                                }
-                                SymEntry::Const(_) => {
-                                    panic!("Cannot assign to a constant: {}", name)
-                                }
-                                SymEntry::Array(..) | SymEntry::ConstArray(..) => {
-                                    panic!("Cannot assign to an array: {}", name)
+                                _ => {
+                                    panic!("Invalid assignment target: {}", name)
                                 }
                             }
                         }
@@ -267,7 +260,7 @@ impl DeduceFrom<&Block> for KoopaBlock {
 
 // Function conversion.
 impl DeduceFrom<&CompUnitDecl> for KoopaFunc {
-    fn deduce_from(t: &CompUnitDecl, symtable: &SymTable) -> Self {
+    fn deduce_from(t: &CompUnitDecl, symtable: &mut SymTable) -> Self {
         match t {
             CompUnitDecl::FuncDef {
                 type_,
@@ -291,7 +284,7 @@ impl DeduceFrom<&CompUnitDecl> for KoopaFunc {
 
 // Array conversion.
 impl DeduceFrom<&InitListElem> for KoopaArrayInitListItem {
-    fn deduce_from(value: &InitListElem, symtable: &SymTable) -> Self {
+    fn deduce_from(value: &InitListElem, symtable: &mut SymTable) -> Self {
         match &value {
             InitListElem::Item(expr) => KoopaArrayInitListItem::Num(expr.reduce(&symtable)),
             InitListElem::List(lis) => KoopaArrayInitListItem::List(
@@ -304,7 +297,7 @@ impl DeduceFrom<&InitListElem> for KoopaArrayInitListItem {
 }
 
 impl DeduceFrom<&InitListElem> for KoopaArrayInitList {
-    fn deduce_from(value: &InitListElem, symtable: &SymTable) -> Self {
+    fn deduce_from(value: &InitListElem, symtable: &mut SymTable) -> Self {
         match &value {
             InitListElem::Item(_) => panic!("Can't initialize an array with a scalar"),
             InitListElem::List(_) => KoopaArrayInitList(
@@ -367,7 +360,7 @@ impl From<&CompUnit> for KoopaProgram {
                                         .iter()
                                         .map(|e| e.reduce(&symtable).try_into().unwrap())
                                         .collect::<Vec<usize>>(),
-                                    init_list: KoopaArrayInitList::deduce_from(init, &symtable),
+                                    init_list: KoopaArrayInitList::deduce_from(init, &mut symtable),
                                 })
                             }
                         };
