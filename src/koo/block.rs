@@ -113,8 +113,8 @@ impl KoopaControlFlow {
                 // Handle the "body" block.
                 // Wrap it as a block and call Block::add_to_bb recursively.
                 ctx.switch(body_bb);
-                ctx.set_break_dst(end_bb);
-                ctx.set_conti_dst(cond_bb);
+                let old_break_dst = ctx.set_break_dst(end_bb);
+                let old_conti_dst = ctx.set_conti_dst(cond_bb);
                 while_block.implement(ctx);
                 let jump_v = ctx.jump(cond_bb);
                 ctx.new_instr(jump_v);
@@ -122,6 +122,10 @@ impl KoopaControlFlow {
 
                 // Finally, change the current basic block to "end_bb".
                 ctx.switch(end_bb);
+                if old_break_dst.is_some() {
+                    ctx.set_break_dst(old_break_dst.unwrap());
+                    ctx.set_conti_dst(old_conti_dst.unwrap());
+                }
             }
             KoopaControlFlow::Break => ctx.break_(),
             KoopaControlFlow::Continue => ctx.continue_(),

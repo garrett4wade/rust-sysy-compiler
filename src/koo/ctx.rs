@@ -254,12 +254,16 @@ impl<'a> KoopaLocalContext<'a> {
             .expect("No continue destination");
     }
 
-    pub fn set_break_dst(&mut self, bb: BasicBlock) {
+    pub fn set_break_dst(&mut self, bb: BasicBlock) -> Option<BasicBlock> {
+        let x = self.break_dst;
         self.break_dst = Some(bb);
+        x
     }
 
-    pub fn set_conti_dst(&mut self, bb: BasicBlock) {
+    pub fn set_conti_dst(&mut self, bb: BasicBlock) -> Option<BasicBlock> {
+        let x = self.conti_dst;
         self.conti_dst = Some(bb);
+        x
     }
 
     // Re-implemented instructions.
