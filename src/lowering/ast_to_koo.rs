@@ -230,9 +230,11 @@ impl DeduceFrom<&Block> for KoopaBlock {
                     }));
                 }
                 BlockItem::Block(b) => {
+                    symtable.fork();
                     koopa_items.push(KoopaBlockItem::Block(Box::new(KoopaBlock::deduce_from(
                         b, symtable,
                     ))));
+                    symtable.join().unwrap();
                 }
                 BlockItem::While { cond, while_block } => {
                     let while_block = Box::new(KoopaBlock::deduce_from(

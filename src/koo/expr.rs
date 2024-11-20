@@ -114,8 +114,6 @@ impl KoopaExpr {
                 _ => {
                     let l = lhs.unroll(ctx);
                     let r = rhs.unroll(ctx);
-                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(l).kind());
-                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(r).kind());
                     let v = ctx.binary(op.into(), l, r);
                     ctx.new_instr(v)
                 }
