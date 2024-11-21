@@ -31,7 +31,10 @@ pub SysYType: SysYType = {
     "void" => SysYType::Void,
 }
 
-pub FuncParam: FuncParam = <type_:SysYType> <ident:Ident> => FuncParam{<>};
+pub FuncParam: FuncParam = {
+  <type_:SysYType> <ident:Ident> => FuncParam::Var(<>),
+  <type_:SysYType> <ident:Ident> "[" "]" <lens:(<ArrayDim>)*> => FuncParam::Arr(<>),
+}
 
 pub Block: Block = "{" <items:(<BlockItem>)*> "}" => Block {<>};
 

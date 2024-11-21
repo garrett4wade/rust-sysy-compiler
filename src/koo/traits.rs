@@ -1,5 +1,4 @@
-
-use crate::koo::ctx::{KoopaLocalContext, KoopaGlobalContext};
+use crate::koo::ctx::{KoopaGlobalContext, KoopaLocalContext};
 use koopa::ir::Value;
 
 pub trait KoopaGlobalDeclaration {
@@ -21,4 +20,3 @@ pub trait KoopaLocalInit {
 pub trait KoopaAssignment {
     fn assign(&self, ctx: &mut KoopaLocalContext, new_v: Value);
 }
-

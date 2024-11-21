@@ -1,4 +1,4 @@
-use koopa::ir::BinaryOp;
+use koopa::ir::{BinaryOp, Type};
 
 use crate::symtable::{SymEntry, SymTable};
 // AST definition
@@ -18,15 +18,45 @@ pub enum CompUnitDecl {
 }
 
 #[derive(Debug, Clone)]
-pub struct FuncParam {
-    pub type_: SysYType,
-    pub ident: String,
+pub enum FuncParam {
+    Var(SysYType, String),
+    Arr(SysYType, String, Vec<Box<Expr>>),
+}
+
+impl FuncParam {
+    pub fn name(&self) -> &str {
+        match self {
+            FuncParam::Var(_, name) => name,
+            FuncParam::Arr(_, name, _) => name,
+        }
+    }
+
+    pub fn ty(&self, symtable: &mut SymTable) -> Type {
+        match self {
+            FuncParam::Var(ty, _) => ty.into(),
+            FuncParam::Arr(ty, _, dims) => {
+                Type::get_pointer(dims.iter().rev().fold(ty.into(), |acc, d| {
+                    Type::get_array(acc, d.reduce(symtable).try_into().unwrap())
+                }))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum SysYType {
     Int,
     Void,
+}
+
+// Type conversion.
+impl From<&SysYType> for Type {
+    fn from(ty: &SysYType) -> Type {
+        match ty {
+            SysYType::Int => Type::get_i32(),
+            SysYType::Void => Type::get_unit(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

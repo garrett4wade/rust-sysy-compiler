@@ -1,4 +1,5 @@
 use crate::koo::ctx::{KoopaContext, KoopaLocalContext};
+use crate::symtable::SymEntry;
 use koopa::ir::{BinaryOp, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -79,8 +80,8 @@ pub enum KoopaExpr {
     Binary(Box<KoopaExpr>, OpCode, Box<KoopaExpr>),
     Const(i32),
     Var(String),
-    FuncParam(String),
     ArrayElem(String, Vec<KoopaExpr>),
+    ArrayElemParam(String, Vec<KoopaExpr>),
     FuncCall(String, Vec<KoopaExpr>),
 }
 
@@ -118,10 +119,63 @@ impl KoopaExpr {
                 }
             },
             KoopaExpr::Const(n) => ctx.integer(n.clone()),
-            KoopaExpr::Var(name) | KoopaExpr::FuncParam(name) => {
-                let x = ctx.symtable().get(name).unwrap().get_var();
-                let v = ctx.load(x);
+            KoopaExpr::Var(name) => {
+                let var = ctx.symtable().get(name).unwrap().get_var();
+                let v = ctx.load(var);
                 ctx.new_instr(v)
+            }
+            KoopaExpr::ArrayElemParam(name, indices) => {
+                println!("{:?}", ctx.program.func(ctx.func).name());
+                let array = ctx.symtable().get(name).unwrap();
+                match array {
+                    SymEntry::Ptr(ptr, _, _dims) => {
+                        // An upper level array parameter in the function.
+                        let mut ptr = ctx.load(ptr);
+                        ctx.new_instr(ptr);
+                        if indices.len() > 0 {
+                            let i = indices[0].unroll(ctx);
+                            ptr = ctx.get_ptr(ptr, i);
+                            ctx.new_instr(ptr);
+                            for i in indices.iter().skip(1) {
+                                let idx = i.unroll(ctx);
+                                ptr = ctx.get_elem_ptr(ptr, idx);
+                                ctx.new_instr(ptr);
+                            }
+                            if indices.len() < _dims.len() + 1 {
+                                // A sub-array.
+                                let i = ctx.integer(0);
+                                let v = ctx.get_elem_ptr(ptr, i);
+                                ptr = ctx.new_instr(v);
+                            } else {
+                                // Array element.
+                                ptr = ctx.load(ptr);
+                                ctx.new_instr(ptr);
+                            }
+                        }
+                        ptr
+                    }
+                    SymEntry::Array(ptr, dims) | SymEntry::ConstArray(ptr, dims) => {
+                        // A local array.
+                        let mut ptr = ptr;
+                        for i in indices.iter() {
+                            let idx = i.unroll(ctx);
+                            ptr = ctx.get_elem_ptr(ptr, idx);
+                            ctx.new_instr(ptr);
+                        }
+                        if indices.len() < dims.len() {
+                            // A sub-array.
+                            let i = ctx.integer(0);
+                            let v = ctx.get_elem_ptr(ptr, i);
+                            ptr = ctx.new_instr(v);
+                        } else {
+                            // Array element.
+                            ptr = ctx.load(ptr);
+                            ctx.new_instr(ptr);
+                        }
+                        ptr
+                    }
+                    _ => panic!("Invalid ArrayElemParam: {:?}", array),
+                }
             }
             KoopaExpr::ArrayElem(name, indices) => {
                 let arr_v = KoopaVarArray::empty(name.clone()).get_coord_var(ctx, indices);
@@ -132,6 +186,9 @@ impl KoopaExpr {
             KoopaExpr::FuncCall(funcname, args) => {
                 let callee = ctx.symtable().get(funcname).unwrap().get_func();
                 let args = args.iter().map(|e| e.unroll(ctx)).collect::<Vec<Value>>();
+                for arg in args.iter() {
+                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(*arg).ty());
+                }
                 let call = ctx.call(callee, args);
                 ctx.new_instr(call)
             }

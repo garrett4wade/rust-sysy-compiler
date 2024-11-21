@@ -1,7 +1,5 @@
 use crate::symtable::{SymEntry, SymTable};
-use koopa::ir::builder::{
-    BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder,
-};
+use koopa::ir::builder::{BasicBlockBuilder, GlobalInstBuilder, LocalInstBuilder, ValueBuilder};
 use koopa::ir::{BasicBlock, Function, FunctionData, Program, Type, Value, ValueKind};
 
 pub trait KoopaContext {
@@ -102,8 +100,6 @@ impl<'a> KoopaContext for KoopaLocalContext<'a> {
             .dfg_mut()
             .set_value_name(value.clone(), Some(name.clone()));
     }
-
-    
 }
 
 impl<'a> KoopaLocalContext<'a> {
@@ -345,5 +341,13 @@ impl<'a> KoopaLocalContext<'a> {
             .dfg_mut()
             .new_value()
             .store(value, ptr)
+    }
+
+    pub fn get_ptr(&mut self, ptr: Value, index: Value) -> Value {
+        self.program
+            .func_mut(self.func)
+            .dfg_mut()
+            .new_value()
+            .get_ptr(ptr, index)
     }
 }

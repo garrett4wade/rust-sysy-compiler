@@ -4,6 +4,7 @@ use crate::koo::block::KoopaBlock;
 use crate::koo::ctx::{KoopaGlobalContext, KoopaLocalContext};
 use crate::symtable::SymEntry;
 
+use super::array::{KoopaArray, KoopaVarArray};
 use super::ctx::KoopaContext;
 
 pub struct KoopaFunc {
@@ -56,9 +57,18 @@ impl KoopaFunc {
             let alloc = ctx.alloc(ty.clone());
             ctx.set_value_name(&alloc, &format!("%{}", p.unwrap()));
             let store = ctx.store(pv.clone(), alloc.clone());
-            ctx.symtable
-                .insert(pname, SymEntry::Var(alloc, ty.clone()))
-                .expect("Inserting func param fails");
+            if ty.is_i32() || ty.is_unit() {
+                ctx.symtable
+                    .insert(pname, SymEntry::Var(alloc, ty.clone()))
+                    .expect("Inserting func param fails");
+            } else {
+                ctx.symtable
+                    .insert(
+                        pname,
+                        SymEntry::Ptr(alloc, ty.clone(), KoopaVarArray::dims_from_ty(&ty)),
+                    )
+                    .expect("Inserting func param fails");
+            }
             ctx.new_instr(alloc);
             ctx.new_instr(store);
         }

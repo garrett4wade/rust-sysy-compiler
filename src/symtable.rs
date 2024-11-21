@@ -8,42 +8,49 @@ use std::rc::Rc;
 pub enum SymEntry {
     Const(i32),
     Var(Value, Type),
+    Ptr(Value, Type, Vec<usize>),
     Func(Function),
     FuncParam(Value, Type),
     Array(Value, Vec<usize>),
     ConstArray(Value, Vec<usize>),
     // Used for conversion
     VarType(Type),
-    FuncParamType(Type),
+    PtrType(Type, Vec<usize>),
 }
 
 impl SymEntry {
     pub fn get_const(&self) -> i32 {
         match self {
             SymEntry::Const(i) => *i,
-            _ => panic!("SymEntry is not a constant"),
+            _ => panic!("SymEntry is not a constant: {:?}", self),
         }
     }
 
     pub fn get_var(&self) -> Value {
         match self {
             SymEntry::Var(v, _) => v.clone(),
-            _ => panic!("SymEntry is not a variable"),
+            _ => panic!("SymEntry is not a variable: {:?}", self),
         }
     }
 
+    pub fn get_ptr(&self) -> Value {
+        match self {
+            SymEntry::Ptr(v, _, _) => v.clone(),
+            _ => panic!("SymEntry is not a pointer: {:?}", self),
+        }
+    }
     pub fn get_var_ty(&self) -> Type {
         match self {
             SymEntry::VarType(ty) => ty.clone(),
             SymEntry::Var(_, ty) => ty.clone(),
-            _ => panic!("SymEntry is not a variable"),
+            _ => panic!("SymEntry is not a variable: {:?}", self),
         }
     }
 
     pub fn get_func(&self) -> Function {
         match self {
             SymEntry::Func(f) => f.clone(),
-            _ => panic!("SymEntry is not a function"),
+            _ => panic!("SymEntry is not a function: {:?}", self),
         }
     }
 
@@ -56,7 +63,6 @@ impl SymEntry {
 
     pub fn get_func_param_ty(&self) -> Type {
         match self {
-            SymEntry::FuncParamType(ty) => ty.clone(),
             SymEntry::FuncParam(_, ty) => ty.clone(),
             _ => panic!("SymEntry is not a function parameter: {:?}", self),
         }
@@ -65,7 +71,7 @@ impl SymEntry {
     pub fn get_var_array(&self) -> Value {
         match self {
             SymEntry::Array(v, _) => v.clone(),
-            _ => panic!("SymEntry is not an array"),
+            _ => panic!("SymEntry is not an array: {:?}", self),
         }
     }
 
@@ -76,7 +82,7 @@ impl SymEntry {
     pub fn get_const_array(&self) -> Value {
         match self {
             SymEntry::ConstArray(v, _) => v.clone(),
-            _ => panic!("SymEntry is not a constant array"),
+            _ => panic!("SymEntry is not a constant array: {:?}", self),
         }
     }
 
@@ -87,14 +93,14 @@ impl SymEntry {
     pub fn get_array(&self) -> Value {
         match self {
             SymEntry::Array(v, _) | SymEntry::ConstArray(v, _) => v.clone(),
-            _ => panic!("SymEntry is not an array"),
+            _ => panic!("SymEntry is not an array: {:?}", self),
         }
     }
 
     pub fn get_array_dims(&self) -> &Vec<usize> {
         match self {
             SymEntry::Array(_, dims) | SymEntry::ConstArray(_, dims) => dims,
-            _ => panic!("SymEntry is not an array"),
+            _ => panic!("SymEntry is not an array: {:?}", self),
         }
     }
 }

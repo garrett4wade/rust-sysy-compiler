@@ -1,14 +1,14 @@
 use core::panic;
 
 use koopa::ir::builder::GlobalInstBuilder;
-use koopa::ir::{Type, Value};
+use koopa::ir::{Type, TypeKind, Value};
 
 use crate::koo::ctx::{KoopaContext, KoopaGlobalContext, KoopaLocalContext};
 use crate::koo::expr::KoopaExpr;
 use crate::koo::traits::{
     KoopaAssignment, KoopaGlobalDeclaration, KoopaGlobalInit, KoopaLocalDeclaration, KoopaLocalInit,
 };
-use crate::symtable::SymEntry;
+use crate::symtable::{SymEntry, SymTable};
 use num::PrimInt;
 
 #[derive(Clone, Debug)]
@@ -39,6 +39,29 @@ pub trait KoopaArray {
     fn init_list(&self) -> &KoopaArrayInitList;
 
     fn sym_entry(&self, value: Value) -> SymEntry;
+
+    fn decl(&self, symtable: &mut SymTable) {
+        symtable
+            .insert(
+                self.name().clone(),
+                SymEntry::PtrType(self.ty(), self.dims().to_vec()),
+            )
+            .unwrap();
+    }
+
+    fn dims_from_ty(ty: &Type) -> Vec<usize> {
+        let mut dims = vec![];
+        let mut ty = ty.clone();
+        if let TypeKind::Pointer(_ty) = ty.kind() {
+            ty = _ty.clone();
+        }
+        while let TypeKind::Array(_ty, len) = ty.kind() {
+            dims.push(len.clone());
+            ty = _ty.clone();
+        }
+        dims.reverse();
+        dims
+    }
 
     fn coord<I: PrimInt + TryInto<usize>>(&self, idx: I) -> Vec<usize> {
         let dims = self.dims();
@@ -77,14 +100,33 @@ pub trait KoopaArray {
     }
 
     fn get_coord_var(&self, ctx: &mut KoopaLocalContext, idx: &[KoopaExpr]) -> Value {
-        let array = (&ctx).symtable.get(self.name()).unwrap().get_array();
-        let mut ptr = array;
-        for i in idx {
-            let j = i.unroll(ctx);
-            ptr = ctx.get_elem_ptr(ptr, j);
-            ctx.new_instr(ptr);
+        let array = (&ctx).symtable.get(self.name()).unwrap();
+        match array {
+            SymEntry::Array(array, _) | SymEntry::ConstArray(array, _) => {
+                let mut ptr = array;
+                for i in idx {
+                    let j = i.unroll(ctx);
+                    ptr = ctx.get_elem_ptr(ptr, j);
+                    ctx.new_instr(ptr);
+                }
+                ptr
+            }
+            SymEntry::Ptr(ptr, _, _) => {
+                let load = ctx.load(ptr);
+                ctx.new_instr(load);
+                let mut ptr = load;
+                let j = idx[0].unroll(ctx);
+                ptr = ctx.get_ptr(ptr, j);
+                ctx.new_instr(ptr);
+                for i in idx.iter().skip(1) {
+                    let j = i.unroll(ctx);
+                    ptr = ctx.get_elem_ptr(ptr, j);
+                    ctx.new_instr(ptr);
+                }
+                ptr
+            }
+            _ => panic!("Invalid array type"),
         }
-        ptr
     }
 }
 

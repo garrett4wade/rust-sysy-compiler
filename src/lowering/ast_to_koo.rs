@@ -1,10 +1,9 @@
 use koopa::ir::Type;
 
-use crate::ast::{
-    Block, BlockItem, CompUnit, CompUnitDecl, Expr, InitListElem, LVal, SymbolValue, SysYType,
-};
+use crate::ast::{Block, BlockItem, CompUnit, CompUnitDecl, Expr, InitListElem, LVal, SymbolValue};
 use crate::koo::array::{
-    KoopaArrayElem, KoopaArrayInitList, KoopaArrayInitListItem, KoopaConstArray, KoopaVarArray,
+    KoopaArray, KoopaArrayElem, KoopaArrayInitList, KoopaArrayInitListItem, KoopaConstArray,
+    KoopaVarArray,
 };
 use crate::koo::block::{KoopaBlock, KoopaBlockItem, KoopaControlFlow, KoopaInstr};
 use crate::koo::expr::KoopaExpr;
@@ -40,16 +39,6 @@ where
     }
 }
 
-// Type conversion.
-impl From<&SysYType> for Type {
-    fn from(ty: &SysYType) -> Type {
-        match ty {
-            SysYType::Int => Type::get_i32(),
-            SysYType::Void => Type::get_unit(),
-        }
-    }
-}
-
 // Expression conversion.
 impl DeduceFrom<&Expr> for KoopaExpr {
     fn deduce_from(t: &Expr, symtable: &mut SymTable) -> Self {
@@ -71,7 +60,6 @@ impl DeduceFrom<&Expr> for KoopaExpr {
                     match symv {
                         SymEntry::Const(v) => Const(v),
                         SymEntry::VarType(..) => Var(name.clone()),
-                        SymEntry::FuncParamType(_) => FuncParam(name.clone()),
                         _ => {
                             panic!("Invalid expression element.")
                         }
@@ -85,12 +73,38 @@ impl DeduceFrom<&Expr> for KoopaExpr {
                         .collect(),
                 ),
             },
-            Expr::FuncCall { funcname, args } => FuncCall(
-                funcname.clone(),
-                args.into_iter()
-                    .map(|x| x.as_ref().deduce_into(symtable))
-                    .collect(),
-            ),
+            Expr::FuncCall { funcname, args } => {
+                let mut new_args = vec![];
+                for arg in args.iter() {
+                    let arg_ = match arg.as_ref() {
+                        Expr::Symbol(lval) => match lval {
+                            LVal::Ident(name) => {
+                                let symv = symtable.get(name).unwrap();
+                                match symv {
+                                    SymEntry::Const(v) => Const(v),
+                                    SymEntry::VarType(..) => Var(name.clone()),
+                                    SymEntry::PtrType(_, _dims) => {
+                                        ArrayElemParam(name.clone(), vec![])
+                                    }
+                                    _ => {
+                                        panic!("Invalid expression element.")
+                                    }
+                                }
+                            }
+                            LVal::ArrayElem(name, indices) => ArrayElemParam(
+                                name.clone(),
+                                indices
+                                    .into_iter()
+                                    .map(|x| x.as_ref().deduce_into(symtable))
+                                    .collect(),
+                            ),
+                        },
+                        _ => arg.as_ref().deduce_into(symtable),
+                    };
+                    new_args.push(arg_)
+                }
+                FuncCall(funcname.clone(), new_args)
+            }
         }
     }
 }
@@ -116,6 +130,7 @@ impl DeduceFrom<&Block> for KoopaBlock {
                                         .as_ref()
                                         .map(|x| KoopaArrayInitList::deduce_from(x, symtable)),
                                 };
+                                v.decl(symtable);
                                 koopa_items
                                     .push(KoopaBlockItem::Instr(LocalDecl(Box::new(v.clone()))));
                                 if init.is_some() {
@@ -151,6 +166,7 @@ impl DeduceFrom<&Block> for KoopaBlock {
                                         .collect::<Vec<usize>>(),
                                     init_list: KoopaArrayInitList::deduce_from(init, symtable),
                                 };
+                                v.decl(symtable);
                                 koopa_items
                                     .push(KoopaBlockItem::Instr(LocalDecl(Box::new(v.clone()))));
                                 koopa_items.push(KoopaBlockItem::Instr(LocalInit(Box::new(v))));
@@ -269,17 +285,24 @@ impl DeduceFrom<&CompUnitDecl> for KoopaFunc {
             } => {
                 let param_names = params
                     .iter()
-                    .map(|p| Some(p.ident.clone()))
+                    .map(|p| Some(p.name().to_string()))
                     .collect::<Vec<Option<String>>>();
-                let param_types = params
-                    .iter()
-                    .map(|p| (&p.type_).into())
-                    .collect::<Vec<Type>>();
+                let param_types = params.iter().map(|p| p.ty(symtable)).collect::<Vec<Type>>();
                 symtable.fork();
                 for (p, ty) in param_names.iter().zip(param_types.iter()) {
-                    symtable
-                        .insert(p.clone().unwrap(), SymEntry::FuncParamType(ty.clone()))
-                        .unwrap();
+                    if ty.is_i32() || ty.is_unit() {
+                        symtable
+                            .insert(p.clone().unwrap(), SymEntry::VarType(ty.clone()))
+                            .unwrap();
+                    } else {
+                        // Pointer/Array type.
+                        symtable
+                            .insert(
+                                p.clone().unwrap(),
+                                SymEntry::PtrType(ty.clone(), KoopaVarArray::dims_from_ty(&ty)),
+                            )
+                            .unwrap();
+                    }
                 }
                 let block = KoopaBlock::deduce_from(block, symtable);
                 symtable.join().unwrap();

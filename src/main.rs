@@ -7,8 +7,8 @@ use std::io::prelude::*;
 pub mod asm;
 pub mod ast;
 mod koo;
-mod symtable;
 mod lowering;
+mod symtable;
 // pub mod reg;
 lalrpop_mod!(
     #[allow(clippy::ptr_arg)]
