@@ -11,7 +11,6 @@ use crate::koo::traits::{
 use crate::symtable::SymEntry;
 use num::PrimInt;
 
-
 #[derive(Clone, Debug)]
 pub struct KoopaConstArray {
     pub name: String,
@@ -93,7 +92,7 @@ pub trait KoopaArray {
 impl<A: KoopaArray> KoopaLocalDeclaration for A {
     fn local_decl(&self, ctx: &mut KoopaLocalContext) {
         let v = ctx.alloc(self.ty());
-        ctx.set_value_name(&v, self.name());
+        ctx.set_value_name(&v, &format!("@{}", self.name()));
         ctx.new_instr(v);
         ctx.symtable_mut()
             .insert(self.name().clone(), self.sym_entry(v))
@@ -105,7 +104,7 @@ impl<A: KoopaArray> KoopaGlobalDeclaration for A {
     fn global_decl(&self, ctx: &mut KoopaGlobalContext) {
         let iv = ctx.zero_init(self.ty());
         let v = ctx.global_alloc(iv);
-        ctx.set_value_name(&v, self.name());
+        ctx.set_value_name(&v, &format!("@{}", self.name()));
         ctx.new_instr(v);
         ctx.symtable_mut()
             .insert(self.name().clone(), self.sym_entry(v))
@@ -126,9 +125,6 @@ impl<A: KoopaArray> KoopaLocalInit for A {
 
         // Set the initialization value to the array.
         for (i, v) in res.iter().enumerate() {
-            if *v == 0 {
-                continue;
-            }
             let init_v = ctx.integer(*v);
             let ptr = self.get(ctx, i);
             let store = ctx.store(init_v, ptr);
@@ -161,7 +157,7 @@ impl<A: KoopaArray> KoopaGlobalInit for A {
         ctx.program
             .set_value_name(v, Some(format!("@{}", self.name())));
         ctx.symtable
-            .insert(self.name().clone(), self.sym_entry(v))
+            .replace(self.name().clone(), self.sym_entry(v))
             .unwrap();
     }
 }
