@@ -125,7 +125,6 @@ impl KoopaExpr {
                 ctx.new_instr(v)
             }
             KoopaExpr::ArrayElemParam(name, indices) => {
-                println!("{:?}", ctx.program.func(ctx.func).name());
                 let array = ctx.symtable().get(name).unwrap();
                 match array {
                     SymEntry::Ptr(ptr, _, _dims) => {
@@ -186,9 +185,6 @@ impl KoopaExpr {
             KoopaExpr::FuncCall(funcname, args) => {
                 let callee = ctx.symtable().get(funcname).unwrap().get_func();
                 let args = args.iter().map(|e| e.unroll(ctx)).collect::<Vec<Value>>();
-                for arg in args.iter() {
-                    println!("{:?}", ctx.program.func(ctx.func).dfg().value(*arg).ty());
-                }
                 let call = ctx.call(callee, args);
                 ctx.new_instr(call)
             }

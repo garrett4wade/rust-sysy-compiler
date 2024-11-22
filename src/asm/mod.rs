@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 // use crate::reg::RegAllocator;
 use koopa::ir::dfg::DataFlowGraph;
-use koopa::ir::{entities::ValueData, BinaryOp, Program, TypeKind, Value, ValueKind};
+use koopa::ir::{entities::ValueData, BinaryOp, Program, Type, TypeKind, Value, ValueKind};
 
 // pub trait GenerateASM {
 //     fn to_riscv(self) -> String;
@@ -125,13 +125,34 @@ fn ptr_data_size(data: &ValueData) -> usize {
         panic!("Alloc should produce a pointer type");
     }
 }
-
+fn lswsp(imm: i64, reg: &String, tmp_reg: &String, action: &str) -> Vec<String> {
+    assert!(action == "sw" || action == "lw");
+    let mut imm = imm;
+    let mut res = vec![];
+    if imm >= -2048 && imm <= 2047 {
+        res.push(format!("{} {}, {}(sp)", action, reg, imm));
+        return res;
+    }
+    res.push(format!("add {}, sp, x0", tmp_reg));
+    while imm > 2047 {
+        res.push(format!("addi {}, {}, 2047", tmp_reg, tmp_reg));
+        imm -= 2047;
+    }
+    while imm < -2048 {
+        res.push(format!("addi {}, {}, -2048", tmp_reg, tmp_reg));
+        imm += 2048;
+    }
+    res.push(format!("addi {}, {}, {}", tmp_reg, tmp_reg, imm));
+    res.push(format!("{} {}, 0({})", action, reg, tmp_reg));
+    res
+}
 fn load_var_or_const(
     dfg: &DataFlowGraph,
     value: &Value,
     stack_frame: &StackFrame,
     instrs: &mut Vec<String>,
     reg: &String,
+    tmp_reg: &String,
 ) {
     match dfg.value(value.clone()).kind() {
         ValueKind::Integer(i) => {
@@ -139,7 +160,7 @@ fn load_var_or_const(
         }
         _ => {
             let sp = stack_frame.get_sp(value).unwrap();
-            instrs.push(format!("lw {}, {}(sp)", reg, sp));
+            instrs.extend(lswsp(sp.try_into().unwrap(), reg, tmp_reg, "lw"));
         }
     }
 }
@@ -159,10 +180,22 @@ fn generate_one_inst(
             call.args().iter().enumerate().for_each(|(i, arg)| {
                 if i < 8 {
                     let reg = format!("a{}", i);
-                    load_var_or_const(dfg, arg, stack_frame, instrs, &reg);
+                    load_var_or_const(dfg, arg, stack_frame, instrs, &reg, &"t0".to_string());
                 } else {
-                    load_var_or_const(dfg, arg, stack_frame, instrs, &"t0".to_string());
-                    instrs.push(format!("sw {}, {}(sp)", "t0", (i - 8) * 4,));
+                    load_var_or_const(
+                        dfg,
+                        arg,
+                        stack_frame,
+                        instrs,
+                        &"t0".to_string(),
+                        &"t1".to_string(),
+                    );
+                    instrs.extend(lswsp(
+                        ((i - 8) * 4).try_into().unwrap(),
+                        &"t0".to_string(),
+                        &"t1".to_string(),
+                        "sw",
+                    ));
                 }
             });
             // Call
@@ -172,23 +205,104 @@ fn generate_one_inst(
             // Return
             if !vd.ty().is_unit() {
                 let sp = stack_frame.allocate(dfg, value.clone()).unwrap();
-                instrs.push(format!("sw a0, {}(sp)", sp));
+                instrs.extend(lswsp(
+                    sp.try_into().unwrap(),
+                    &"a0".to_string(),
+                    &"t0".to_string(),
+                    "sw",
+                ));
             }
         }
         ValueKind::Alloc(_) => {
             // "alloc" does not correspond to any RISC-V instruction.
             stack_frame.allocate(dfg, value.clone()).unwrap();
         }
+        ValueKind::GetElemPtr(gep) => {
+            let stride;
+            let src_kind;
+            if program.borrow_values().contains_key(&gep.src()) {
+                src_kind = program.borrow_value(gep.src()).ty().kind().clone();
+            } else {
+                src_kind = dfg.value(gep.src()).ty().kind().clone();
+            }
+            if let TypeKind::Pointer(base_ty) = src_kind {
+                // pointer to a local array
+                if let TypeKind::Array(elem_ty, _) = base_ty.kind() {
+                    stride = elem_ty.size();
+                } else {
+                    panic!(
+                        "The src pointer of GetElemPtr should have an array type: {:?}",
+                        base_ty
+                    );
+                }
+            } else {
+                panic!(
+                    "GetElemPtr should have an array pointer type: {:?}",
+                    dfg.value(gep.src()).ty()
+                );
+            }
+
+            // Compute offset.
+            load_var_or_const(
+                dfg,
+                &gep.index(),
+                stack_frame,
+                instrs,
+                &"t0".to_string(),
+                &"t1".to_string(),
+            );
+            instrs.push(format!("li t1, {}", stride));
+            instrs.push(format!("mul t0, t0, t1"));
+
+            // Get base pointer.
+            let arr_ptr = stack_frame.get_sp(&gep.src());
+            if arr_ptr.is_ok() {
+                // local array
+                if matches!(dfg.value(gep.src()).kind(), ValueKind::Alloc(..)) {
+                    let mut arr_ptr = arr_ptr.unwrap();
+                    while arr_ptr > 2047 {
+                        instrs.push("addi t0, t0, 2047".to_string());
+                        arr_ptr -= 2047;
+                    }
+                    instrs.push(format!("addi t0, t0, {}", arr_ptr));
+                    instrs.push(format!("add t0, t0, sp"));
+                } else {
+                    load_var_or_const(
+                        dfg,
+                        &gep.src(),
+                        stack_frame,
+                        instrs,
+                        &"t1".to_string(),
+                        &"t2".to_string(),
+                    );
+                    instrs.push("add t0, t0, t1".to_string());
+                }
+            } else {
+                // global array
+                instrs.push(format!(
+                    "la t1, {}",
+                    program.borrow_value(gep.src()).name().as_ref().unwrap()[1..].to_string()
+                ));
+                instrs.push(format!("add t0, t0, t1"));
+            }
+            let ofst = stack_frame.allocate(dfg, value.clone()).unwrap();
+            instrs.extend(lswsp(
+                ofst.try_into().unwrap(),
+                &"t0".to_string(),
+                &"t1".to_string(),
+                "sw",
+            ));
+        }
         ValueKind::Store(s) => {
             let vname = dfg.value(s.value()).name().clone();
             let dname;
-            let is_global_var;
+            let is_global;
             if program.borrow_values().contains_key(&s.dest()) {
                 dname = program.borrow_value(s.dest()).name().clone();
-                is_global_var = true;
+                is_global = true;
             } else {
                 dname = dfg.value(s.dest()).name().clone();
-                is_global_var = false;
+                is_global = false;
             }
             if vname.is_some()
                 && dname.is_some()
@@ -198,25 +312,50 @@ fn generate_one_inst(
                 // Store function parameters.
                 if stack_frame.arg_cnt < 8 {
                     let reg = format!("a{}", stack_frame.arg_cnt);
-                    instrs.push(format!(
-                        "sw {}, {}(sp)",
-                        reg,
-                        stack_frame.get_sp(&s.dest()).unwrap()
+                    instrs.extend(lswsp(
+                        stack_frame.get_sp(&s.dest()).unwrap().try_into().unwrap(),
+                        &reg,
+                        &"t0".to_string(),
+                        "sw",
                     ));
                 } else {
-                    instrs.push(format!(
-                        "lw t0, {}(sp)",
-                        stack_frame.size + (stack_frame.arg_cnt - 8) * 4
+                    instrs.extend(lswsp(
+                        ((stack_frame.arg_cnt - 8) * 4).try_into().unwrap(),
+                        &"t0".to_string(),
+                        &"t1".to_string(),
+                        "lw",
                     ));
-                    instrs.push(format!(
-                        "sw t0, {}(sp)",
-                        stack_frame.get_sp(&s.dest()).unwrap()
+                    instrs.extend(lswsp(
+                        stack_frame.get_sp(&s.dest()).unwrap().try_into().unwrap(),
+                        &"t0".to_string(),
+                        &"t1".to_string(),
+                        "sw",
                     ));
                 }
                 stack_frame.step_arg();
             } else {
-                load_var_or_const(dfg, &s.value(), stack_frame, instrs, &"t0".to_string());
-                if is_global_var {
+                load_var_or_const(
+                    dfg,
+                    &s.value(),
+                    stack_frame,
+                    instrs,
+                    &"t0".to_string(),
+                    &"t1".to_string(),
+                );
+                if matches!(
+                    dfg.value(s.dest()).kind(),
+                    ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)
+                ) {
+                    load_var_or_const(
+                        dfg,
+                        &s.dest(),
+                        stack_frame,
+                        instrs,
+                        &"t1".to_string(),
+                        &"t2".to_string(),
+                    );
+                    instrs.push("sw t0, 0(t1)".to_string());
+                } else if is_global {
                     instrs.push(format!(
                         "la {}, {}",
                         "t1",
@@ -224,48 +363,75 @@ fn generate_one_inst(
                     ));
                     instrs.push("sw t0, 0(t1)".to_string());
                 } else {
-                    instrs.push(format!(
-                        "sw {}, {}(sp)",
-                        "t0",
-                        stack_frame.get_sp(&s.dest()).unwrap()
+                    instrs.extend(lswsp(
+                        stack_frame.get_sp(&s.dest()).unwrap().try_into().unwrap(),
+                        &"t0".to_string(),
+                        &"t1".to_string(),
+                        "sw",
                     ));
                 }
             }
         }
         ValueKind::Load(l) => {
-            if program.borrow_values().contains_key(&l.src()) {
-                if let ValueKind::GlobalAlloc(_) = program.borrow_value(l.src().clone()).kind() {
-                    instrs.push(format!(
-                        "la {}, {}",
-                        "t0",
-                        program
-                            .borrow_value(l.src().clone())
-                            .name()
-                            .as_ref()
-                            .unwrap()[1..]
-                            .to_string()
-                    ));
-                    instrs.push("lw t0, 0(t0)".to_string());
-                }
-            } else {
+            if matches!(
+                dfg.value(l.src()).kind(),
+                ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)
+            ) {
+                load_var_or_const(
+                    dfg,
+                    &l.src(),
+                    stack_frame,
+                    instrs,
+                    &"t0".to_string(),
+                    &"t1".to_string(),
+                );
+                instrs.push("lw t0, 0(t0)".to_string());
+            } else if program.borrow_values().contains_key(&l.src()) {
+                // Load global variable.
                 instrs.push(format!(
-                    "lw {}, {}(sp)",
+                    "la {}, {}",
                     "t0",
-                    stack_frame.get_sp(&l.src()).unwrap()
+                    program
+                        .borrow_value(l.src().clone())
+                        .name()
+                        .as_ref()
+                        .unwrap()[1..]
+                        .to_string()
+                ));
+                instrs.push("lw t0, 0(t0)".to_string());
+            } else {
+                // Load local variable.
+                instrs.extend(lswsp(
+                    stack_frame.get_sp(&l.src()).unwrap().try_into().unwrap(),
+                    &"t0".to_string(),
+                    &"t1".to_string(),
+                    "lw",
                 ));
             }
             let sp = stack_frame.allocate(dfg, value.clone()).unwrap();
-            instrs.push(format!("sw {}, {}(sp)", "t0", sp));
+            instrs.extend(lswsp(
+                sp.try_into().unwrap(),
+                &"t0".to_string(),
+                &"t1".to_string(),
+                "sw",
+            ));
         }
         ValueKind::Return(r) => {
             let ret_v = r.value();
             if let Some(v) = ret_v {
-                load_var_or_const(dfg, &v, stack_frame, instrs, &"a0".to_string());
+                load_var_or_const(
+                    dfg,
+                    &v,
+                    stack_frame,
+                    instrs,
+                    &"a0".to_string(),
+                    &"t0".to_string(),
+                );
             }
         }
         ValueKind::Branch(b) => {
             let reg = "t0".to_string();
-            load_var_or_const(dfg, &b.cond(), stack_frame, instrs, &reg);
+            load_var_or_const(dfg, &b.cond(), stack_frame, instrs, &reg, &"t1".to_string());
             instrs.push(format!(
                 "bnez {}, {}",
                 reg,
@@ -285,8 +451,22 @@ fn generate_one_inst(
         ValueKind::Binary(b) => {
             let lhs_v = "t0".to_string();
             let rhs_v = "t1".to_string();
-            load_var_or_const(dfg, &b.lhs(), stack_frame, instrs, &lhs_v);
-            load_var_or_const(dfg, &b.rhs(), stack_frame, instrs, &rhs_v);
+            load_var_or_const(
+                dfg,
+                &b.lhs(),
+                stack_frame,
+                instrs,
+                &lhs_v,
+                &"t2".to_string(),
+            );
+            load_var_or_const(
+                dfg,
+                &b.rhs(),
+                stack_frame,
+                instrs,
+                &rhs_v,
+                &"t2".to_string(),
+            );
 
             let regout: String = "t0".to_string();
 
@@ -340,7 +520,12 @@ fn generate_one_inst(
             }
 
             let sp = stack_frame.allocate(dfg, value.clone()).unwrap();
-            instrs.push(format!("sw {}, {}(sp)", regout, sp));
+            instrs.extend(lswsp(
+                sp.try_into().unwrap(),
+                &regout,
+                &"t2".to_string(),
+                "sw",
+            ));
         }
         _ => {
             panic!("Not implemented");
@@ -348,7 +533,36 @@ fn generate_one_inst(
     }
 }
 
+fn global_init(program: &Program, initv: Value, size: usize) -> Vec<String> {
+    let init_data = program.borrow_value(initv);
+    let kd = init_data.kind();
+    match kd {
+        ValueKind::Integer(i) => {
+            if i.value() == 0 {
+                vec![format!("{}.zero {}", INDENT, size)]
+            } else {
+                vec![format!("{}.word {}", INDENT, i.value())]
+            }
+        }
+        ValueKind::ZeroInit(_) => {
+            vec![format!("{}.zero {}", INDENT, size)]
+        }
+        ValueKind::Aggregate(agg) => {
+            let elems = agg.elems();
+            assert!(size % elems.len() == 0);
+            let mut instrs = vec![];
+            for elem in elems {
+                instrs.extend(global_init(program, *elem, size / elems.len()));
+            }
+            instrs
+        }
+        _ => panic!("Invalid initializer: {:?}", init_data.kind()),
+    }
+}
 pub fn build_riscv(program: &Program) -> String {
+    // Set the pointer size to 4 bytes.
+    Type::set_ptr_size(4);
+
     let mut riscv: Vec<String> = vec![];
 
     // Global variables.
@@ -362,20 +576,7 @@ pub fn build_riscv(program: &Program) -> String {
             seg.push(format!("{}.globl {}", INDENT, name));
             seg.push(format!("{}:", name));
             let initv = alloc.init();
-            if let ValueKind::Integer(i) = program.borrow_value(initv).kind() {
-                if i.value() == 0 {
-                    seg.push(format!("{}.zero {}", INDENT, size));
-                } else {
-                    seg.push(format!("{}.word {}", INDENT, i.value()));
-                }
-            } else if let ValueKind::ZeroInit(_) = program.borrow_value(initv).kind() {
-                seg.push(format!("{}.zero {}", INDENT, size));
-            } else {
-                panic!(
-                    "Global variable is not an integer: {:?}",
-                    program.borrow_value(initv)
-                )
-            }
+            seg.extend(global_init(program, initv, size));
             riscv.push(seg.join("\n"))
         } else {
             panic!("Only support GlobalAlloc in the global scope")
@@ -421,6 +622,9 @@ pub fn build_riscv(program: &Program) -> String {
                     ValueKind::Alloc(_) => {
                         ss_var += ptr_data_size(inst_data) as i64;
                     }
+                    ValueKind::GetElemPtr(..) | ValueKind::GetPtr(..) => {
+                        ss_var += 4;
+                    }
                     ValueKind::Branch(..)
                     | ValueKind::Jump(..)
                     | ValueKind::Return(..)
@@ -429,15 +633,24 @@ pub fn build_riscv(program: &Program) -> String {
                         panic!("Unknown value kind: {:?}", inst_data.kind())
                     }
                 }
+                // println!("{} {} {} {:?}", ss_var, ss_ra, ss_arg, inst_data);
             }
         }
+        // println!("{} {} {}", ss_var, ss_ra, ss_arg);
         let mut ss = ss_var + ss_ra + ss_arg;
         ss = (ss + 15) / 16 * 16; // Round to multiple of 16.
         if ss > 0 {
+            let mut ss = ss as usize;
+            while ss > 2048 {
+                func_riscv.push(format!("{}addi sp, sp, -2048", INDENT));
+                ss -= 2048;
+            }
             func_riscv.push(format!("{}addi sp, sp, -{}", INDENT, ss));
         }
         if ss_ra > 0 {
-            func_riscv.push(format!("{}sw ra, {}(sp)", INDENT, ss - ss_ra));
+            lswsp(ss - ss_ra, &"ra".to_string(), &"t0".to_string(), "sw")
+                .iter()
+                .for_each(|instr| func_riscv.push(format!("{}{}", INDENT, instr)));
         }
 
         // Instruction placeholders.
@@ -460,9 +673,20 @@ pub fn build_riscv(program: &Program) -> String {
                     // Epilogue
                     // Recover $ra and the stack frame.
                     if ss_ra > 0 {
-                        bb_instrs.push(format!("lw ra, {}(sp)", ss - ss_ra));
+                        let mut ss = ss - ss_ra;
+                        bb_instrs.push("add t0, sp, x0".to_string());
+                        while ss > 2047 {
+                            bb_instrs.push("addi t0, t0, 2047".to_string());
+                            ss -= 2047;
+                        }
+                        bb_instrs.push(format!("lw ra, {}(t0)", ss));
                     }
                     if ss > 0 {
+                        let mut ss = ss as usize;
+                        while ss > 2047 {
+                            bb_instrs.push(format!("addi sp, sp, 2047"));
+                            ss -= 2047;
+                        }
                         bb_instrs.push(format!("addi sp, sp, {}", ss));
                     }
                     bb_instrs.push("ret".to_string());
