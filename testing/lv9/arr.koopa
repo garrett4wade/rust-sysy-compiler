@@ -1,6 +1,3 @@
-global @ga = alloc [i32, 10], zeroinit
-global @gb = alloc [[i32, 3], 2], {{5, 6, 7}, {8, 0, 0}}
-
 decl @getint(): i32
 
 decl @getch(): i32
@@ -17,32 +14,279 @@ decl @starttime()
 
 decl @stoptime()
 
+fun @init(@arr: *[[i32, 10], 10]) {
+%entry:
+  %arr = alloc *[[i32, 10], 10]
+  store @arr, %arr
+  @i = alloc i32
+  store 0, @i
+  jump %while0entry
+
+%while0entry:
+  %0 = load @i
+  %1 = lt %0, 10
+  br %1, %while0body, %while0fi
+
+%while0body:
+  @j = alloc i32
+  store 0, @j
+  jump %while1entry
+
+%while0fi:
+  ret
+
+%while1entry:
+  %2 = load @j
+  %3 = lt %2, 10
+  br %3, %while1body, %while1fi
+
+%while1body:
+  @k = alloc i32
+  store 0, @k
+  jump %while2entry
+
+%while1fi:
+  %4 = load @i
+  %5 = add %4, 1
+  store %5, @i
+  jump %while0entry
+
+%while2entry:
+  %6 = load @k
+  %7 = lt %6, 10
+  br %7, %while2body, %while2fi
+
+%while2body:
+  %8 = load @i
+  %9 = mul %8, 100
+  %10 = load @j
+  %11 = mul %10, 10
+  %12 = add %9, %11
+  %13 = load @k
+  %14 = add %12, %13
+  %15 = load %arr
+  %16 = load @i
+  %17 = getptr %15, %16
+  %18 = load @j
+  %19 = getelemptr %17, %18
+  %20 = load @k
+  %21 = getelemptr %19, %20
+  store %14, %21
+  %22 = load @k
+  %23 = add %22, 1
+  store %23, @k
+  jump %while2entry
+
+%while2fi:
+  %24 = load @j
+  %25 = add %24, 1
+  store %25, @j
+  jump %while1entry
+}
+
+fun @f1(@a0: *i32, @a1: *i32, @a2: *i32, @a3: *i32, @a4: *i32, @a5: *i32, @a6: *i32, @a7: *i32, @a8: *i32, @a9: *i32): i32 {
+%entry:
+  %a0 = alloc *i32
+  store @a0, %a0
+  %a1 = alloc *i32
+  store @a1, %a1
+  %a2 = alloc *i32
+  store @a2, %a2
+  %a3 = alloc *i32
+  store @a3, %a3
+  %a4 = alloc *i32
+  store @a4, %a4
+  %a5 = alloc *i32
+  store @a5, %a5
+  %a6 = alloc *i32
+  store @a6, %a6
+  %a7 = alloc *i32
+  store @a7, %a7
+  %a8 = alloc *i32
+  store @a8, %a8
+  %a9 = alloc *i32
+  store @a9, %a9
+  %26 = load %a0
+  %27 = getptr %26, 0
+  %28 = load %27
+  %29 = load %a1
+  %30 = getptr %29, 1
+  %31 = load %30
+  %32 = add %28, %31
+  %33 = load %a2
+  %34 = getptr %33, 2
+  %35 = load %34
+  %36 = add %32, %35
+  %37 = load %a3
+  %38 = getptr %37, 3
+  %39 = load %38
+  %40 = add %36, %39
+  %41 = load %a4
+  %42 = getptr %41, 4
+  %43 = load %42
+  %44 = add %40, %43
+  %45 = load %a5
+  %46 = getptr %45, 5
+  %47 = load %46
+  %48 = add %44, %47
+  %49 = load %a6
+  %50 = getptr %49, 6
+  %51 = load %50
+  %52 = add %48, %51
+  %53 = load %a7
+  %54 = getptr %53, 7
+  %55 = load %54
+  %56 = add %52, %55
+  %57 = load %a8
+  %58 = getptr %57, 8
+  %59 = load %58
+  %60 = add %56, %59
+  %61 = load %a9
+  %62 = getptr %61, 9
+  %63 = load %62
+  %64 = add %60, %63
+  ret %64
+}
+
+fun @f2(@a0: *[i32, 10], @a1: *i32, @a2: i32, @a3: *i32, @a4: *i32, @a5: *[[i32, 10], 10], @a6: *i32, @a7: *i32, @a8: i32, @a9: *[i32, 10]): i32 {
+%entry:
+  %a0 = alloc *[i32, 10]
+  store @a0, %a0
+  %a1 = alloc *i32
+  store @a1, %a1
+  %a2 = alloc i32
+  store @a2, %a2
+  %a3 = alloc *i32
+  store @a3, %a3
+  %a4 = alloc *i32
+  store @a4, %a4
+  %a5 = alloc *[[i32, 10], 10]
+  store @a5, %a5
+  %a6 = alloc *i32
+  store @a6, %a6
+  %a7 = alloc *i32
+  store @a7, %a7
+  %a8 = alloc i32
+  store @a8, %a8
+  %a9 = alloc *[i32, 10]
+  store @a9, %a9
+  %65 = load %a0
+  %66 = getptr %65, 0
+  %67 = getelemptr %66, 9
+  %68 = load %67
+  %69 = load %a1
+  %70 = getptr %69, 1
+  %71 = load %70
+  %72 = add %68, %71
+  %73 = load %a2
+  %74 = add %72, %73
+  %75 = load %a3
+  %76 = getptr %75, 3
+  %77 = load %76
+  %78 = add %74, %77
+  %79 = load %a4
+  %80 = getptr %79, 4
+  %81 = load %80
+  %82 = add %78, %81
+  %83 = load %a5
+  %84 = getptr %83, 5
+  %85 = getelemptr %84, 5
+  %86 = getelemptr %85, 5
+  %87 = load %86
+  %88 = add %82, %87
+  %89 = load %a6
+  %90 = getptr %89, 6
+  %91 = load %90
+  %92 = add %88, %91
+  %93 = load %a7
+  %94 = getptr %93, 7
+  %95 = load %94
+  %96 = add %92, %95
+  %97 = load %a8
+  %98 = add %96, %97
+  %99 = load %a9
+  %100 = getptr %99, 9
+  %101 = getelemptr %100, 8
+  %102 = load %101
+  %103 = add %98, %102
+  ret %103
+}
+
 fun @main(): i32 {
 %entry:
-  @a = alloc [i32, 10]
-  @b = alloc [[i32, 3], 2]
-  %0 = getelemptr @b, 0
-  %1 = getelemptr %0, 0
-  store 1, %1
-  %2 = getelemptr @b, 0
-  %3 = getelemptr %2, 1
-  store 2, %3
-  %4 = getelemptr @b, 0
-  %5 = getelemptr %4, 2
-  store 3, %5
-  %6 = getelemptr @b, 1
-  %7 = getelemptr %6, 0
-  store 4, %7
-  %8 = getelemptr @b, 1
-  %9 = getelemptr %8, 1
-  store 0, %9
-  %10 = getelemptr @b, 1
-  %11 = getelemptr %10, 2
-  store 0, %11
+  @arr = alloc [[[i32, 10], 10], 10]
   @sum = alloc i32
   store 0, @sum
-  %12 = getelemptr @gb, 1
-  %13 = getelemptr %12, 2
-  %14 = load %13
-  ret %14
+  %104 = getelemptr @arr, 0
+  call @init(%104)
+  %105 = load @sum
+  %106 = getelemptr @arr, 0
+  %107 = getelemptr %106, 0
+  %108 = getelemptr %107, 0
+  %109 = getelemptr @arr, 1
+  %110 = getelemptr %109, 1
+  %111 = getelemptr %110, 0
+  %112 = getelemptr @arr, 2
+  %113 = getelemptr %112, 2
+  %114 = getelemptr %113, 0
+  %115 = getelemptr @arr, 3
+  %116 = getelemptr %115, 3
+  %117 = getelemptr %116, 0
+  %118 = getelemptr @arr, 4
+  %119 = getelemptr %118, 4
+  %120 = getelemptr %119, 0
+  %121 = getelemptr @arr, 5
+  %122 = getelemptr %121, 5
+  %123 = getelemptr %122, 0
+  %124 = getelemptr @arr, 6
+  %125 = getelemptr %124, 6
+  %126 = getelemptr %125, 0
+  %127 = getelemptr @arr, 7
+  %128 = getelemptr %127, 7
+  %129 = getelemptr %128, 0
+  %130 = getelemptr @arr, 8
+  %131 = getelemptr %130, 8
+  %132 = getelemptr %131, 0
+  %133 = getelemptr @arr, 9
+  %134 = getelemptr %133, 9
+  %135 = getelemptr %134, 0
+  %136 = call @f1(%108, %111, %114, %117, %120, %123, %126, %129, %132, %135)
+  %137 = add %105, %136
+  store %137, @sum
+  %138 = load @sum
+  %139 = getelemptr @arr, 0
+  %140 = getelemptr %139, 0
+  %141 = getelemptr @arr, 1
+  %142 = getelemptr %141, 1
+  %143 = getelemptr %142, 0
+  %144 = getelemptr @arr, 2
+  %145 = getelemptr %144, 2
+  %146 = getelemptr %145, 2
+  %147 = load %146
+  %148 = getelemptr @arr, 3
+  %149 = getelemptr %148, 3
+  %150 = getelemptr %149, 0
+  %151 = getelemptr @arr, 4
+  %152 = getelemptr %151, 4
+  %153 = getelemptr %152, 0
+  %154 = getelemptr @arr, 0
+  %155 = getelemptr @arr, 6
+  %156 = getelemptr %155, 6
+  %157 = getelemptr %156, 0
+  %158 = getelemptr @arr, 7
+  %159 = getelemptr %158, 7
+  %160 = getelemptr %159, 0
+  %161 = getelemptr @arr, 8
+  %162 = getelemptr %161, 8
+  %163 = getelemptr %162, 8
+  %164 = load %163
+  %165 = getelemptr @arr, 9
+  %166 = getelemptr %165, 0
+  %167 = call @f2(%140, %143, %147, %150, %153, %154, %157, %160, %164, %166)
+  %168 = add %138, %167
+  store %168, @sum
+  %169 = load @sum
+  call @putint(%169)
+  call @putch(10)
+  ret 0
 }

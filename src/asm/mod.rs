@@ -217,6 +217,55 @@ fn generate_one_inst(
             // "alloc" does not correspond to any RISC-V instruction.
             stack_frame.allocate(dfg, value.clone()).unwrap();
         }
+        ValueKind::GetPtr(gep) => {
+            let stride;
+            let src_kind;
+            if program.borrow_values().contains_key(&gep.src()) {
+                src_kind = program.borrow_value(gep.src()).ty().kind().clone();
+            } else {
+                src_kind = dfg.value(gep.src()).ty().kind().clone();
+            }
+            if let TypeKind::Pointer(base_ty) = src_kind {
+                stride = base_ty.size();
+            } else {
+                panic!(
+                    "GetPtr should have a pointer type: {:?}",
+                    dfg.value(gep.src()).ty()
+                );
+            }
+
+            // Compute offset.
+            load_var_or_const(
+                dfg,
+                &gep.index(),
+                stack_frame,
+                instrs,
+                &"t0".to_string(),
+                &"t1".to_string(),
+            );
+            instrs.push(format!("li t1, {}", stride));
+            instrs.push(format!("mul t0, t0, t1"));
+
+            // Get base pointer.
+            load_var_or_const(
+                dfg,
+                &gep.src(),
+                stack_frame,
+                instrs,
+                &"t1".to_string(),
+                &"t2".to_string(),
+            );
+            // Sum offset.
+            instrs.push("add t0, t0, t1".to_string());
+            // Store the pointer
+            let ofst = stack_frame.allocate(dfg, value.clone()).unwrap();
+            instrs.extend(lswsp(
+                ofst.try_into().unwrap(),
+                &"t0".to_string(),
+                &"t1".to_string(),
+                "sw",
+            ));
+        }
         ValueKind::GetElemPtr(gep) => {
             let stride;
             let src_kind;
@@ -320,7 +369,9 @@ fn generate_one_inst(
                     ));
                 } else {
                     instrs.extend(lswsp(
-                        ((stack_frame.arg_cnt - 8) * 4).try_into().unwrap(),
+                        ((stack_frame.arg_cnt - 8) * 4 + stack_frame.size)
+                            .try_into()
+                            .unwrap(),
                         &"t0".to_string(),
                         &"t1".to_string(),
                         "lw",
@@ -342,10 +393,13 @@ fn generate_one_inst(
                     &"t0".to_string(),
                     &"t1".to_string(),
                 );
-                if matches!(
-                    dfg.value(s.dest()).kind(),
-                    ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)
-                ) {
+                let store_kind;
+                if program.borrow_values().contains_key(&s.dest()) {
+                    store_kind = program.borrow_value(s.dest()).kind().clone();
+                } else {
+                    store_kind = dfg.value(s.dest()).kind().clone();
+                }
+                if matches!(store_kind, ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)) {
                     load_var_or_const(
                         dfg,
                         &s.dest(),
@@ -373,10 +427,13 @@ fn generate_one_inst(
             }
         }
         ValueKind::Load(l) => {
-            if matches!(
-                dfg.value(l.src()).kind(),
-                ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)
-            ) {
+            let load_kind;
+            if program.borrow_values().contains_key(&l.src()) {
+                load_kind = program.borrow_value(l.src()).kind().clone();
+            } else {
+                load_kind = dfg.value(l.src()).kind().clone();
+            }
+            if matches!(load_kind, ValueKind::GetElemPtr(_) | ValueKind::GetPtr(_)) {
                 load_var_or_const(
                     dfg,
                     &l.src(),
